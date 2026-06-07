@@ -137,7 +137,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const deleteTrade = (id: string) => {
     setTrades((prev) => prev.filter((trade) => trade.id !== id));
-    // Optionally remove related transaction
     setTransactions((prev) => prev.filter((t) => t.relatedTradeId !== id));
   };
 

@@ -8,6 +8,7 @@ import { Analytics } from "./pages/Analytics";
 import { Settings } from "./pages/Settings";
 import { TradeDetail } from "./pages/TradeDetail";
 import { Reviews } from "./pages/Reviews";
+import { News } from "./pages/News";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
         <Routes>
           <Route path="/" element={<AppLayout />}>
             <Route index element={<Dashboard />} />
+            <Route path="news" element={<News />} />
             <Route path="journal" element={<Journal />} />
             <Route path="journal/:tradeId" element={<TradeDetail />} />
             <Route path="add" element={<AddTrade />} />

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useAppStore } from "../store/AppContext";
 import { Wallet, Palette, Sliders, Database, Download, Upload, Trash2, Save } from "lucide-react";
 
@@ -52,7 +52,7 @@ export function Settings() {
     a.download = `lootly_backup_${new Date().toISOString().split("T")[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    alert("Data berhasil diexport.");
+    alert("Backup JSON berhasil dibuat.");
   };
 
   const handleExportCSV = () => {
@@ -69,7 +69,7 @@ export function Settings() {
     a.download = `lootly_trades_${new Date().toISOString().split("T")[0]}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    alert("Data berhasil diexport.");
+    alert("CSV berhasil diexport.");
   };
 
   const handleImport = () => {
@@ -99,8 +99,8 @@ export function Settings() {
   return (
     <div className="px-4 md:px-8 max-w-7xl mx-auto w-full pb-8 pt-4">
       <div className="mb-8">
-        <h1 className="font-display text-2xl md:text-3xl font-bold text-on-surface mb-2">Settings</h1>
-        <p className="font-sans text-on-surface-variant">Configure your trading parameters, manage data, dan sesuaikan workspace.</p>
+        <h1 className="font-display text-2xl md:text-3xl font-bold text-on-surface mb-2">Pengaturan</h1>
+        <p className="font-sans text-on-surface-variant">Atur parameter trading, kelola data, dan sesuaikan workspace.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-12 gap-6 auto-rows-min">
@@ -109,12 +109,12 @@ export function Settings() {
         <section className="glass-panel rounded-xl p-6 md:col-span-12 flex flex-col gap-6">
           <div className="flex items-center gap-2 border-b border-white/5 pb-2">
             <Wallet className="text-primary w-5 h-5" />
-            <h2 className="font-display text-lg text-white">Account Configuration</h2>
+            <h2 className="font-display text-lg text-white">Konfigurasi Akun</h2>
           </div>
           
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="flex flex-col gap-1.5">
-              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Starting Balance Demo (IDR)</label>
+              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Saldo Awal Demo (IDR)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant font-mono">Rp</span>
                 <FormattedMoneyInput 
@@ -126,7 +126,7 @@ export function Settings() {
             </div>
             
             <div className="flex flex-col gap-1.5">
-              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Starting Balance Real (IDR)</label>
+              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Saldo Awal Real (IDR)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant font-mono">Rp</span>
                 <FormattedMoneyInput 
@@ -138,7 +138,7 @@ export function Settings() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Target Balance Demo (IDR)</label>
+              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Target Saldo Demo (IDR)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant font-mono">Rp</span>
                 <FormattedMoneyInput 
@@ -150,7 +150,7 @@ export function Settings() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Target Balance Real (IDR)</label>
+              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Target Saldo Real (IDR)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant font-mono">Rp</span>
                 <FormattedMoneyInput 
@@ -162,7 +162,7 @@ export function Settings() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Max Daily Loss (%)</label>
+              <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Maks Risiko Harian (%)</label>
               <div className="relative">
                 <input 
                   type="number" step="0.1"
@@ -175,7 +175,7 @@ export function Settings() {
             </div>
 
             <div className="flex flex-col gap-1.5">
-               <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Stop After Consecutive Losses</label>
+               <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Stop Jika Kalah Berturut-turut</label>
                <input 
                   type="number" 
                   className="glass-input w-full rounded-lg py-2 px-3 text-white font-mono"
@@ -190,7 +190,7 @@ export function Settings() {
         <section className="glass-panel rounded-xl p-6 md:col-span-6 flex flex-col gap-6">
            <div className="flex items-center gap-2 border-b border-white/5 pb-2">
             <Sliders className="text-blue-400 w-5 h-5" />
-            <h2 className="font-display text-lg text-white">Instrument Specs</h2>
+            <h2 className="font-display text-lg text-white">Spesifikasi Instrumen</h2>
           </div>
 
           <div className="space-y-4">
@@ -296,37 +296,48 @@ export function Settings() {
         <section className="glass-panel rounded-xl p-6 md:col-span-6 flex flex-col gap-6">
            <div className="flex items-center gap-2 border-b border-white/5 pb-2">
             <Database className="text-white w-5 h-5" />
-            <h2 className="font-display text-lg text-white">Data Management</h2>
+            <h2 className="font-display text-lg text-white">Backup & Export Data</h2>
           </div>
+          <p className="font-sans text-xs text-on-surface-variant -mt-3">Simpan cadangan jurnal trading kamu atau export ke Excel/Google Sheets.</p>
 
           <div className="flex flex-col gap-4">
             <div className="grid grid-cols-2 gap-2">
-              <button onClick={handleExportJSON} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-blue-400 bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white cursor-pointer hover:shadow-lg">
-                <Download className="w-4 h-4" /> Export JSON
-              </button>
-              <button onClick={handleExportCSV} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-blue-400 bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white cursor-pointer hover:shadow-lg">
-                <Download className="w-4 h-4" /> Export CSV
-              </button>
+              <div className="flex flex-col gap-1">
+                 <button onClick={handleExportJSON} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-blue-400 bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white cursor-pointer hover:shadow-lg">
+                   <Download className="w-4 h-4" /> Export JSON
+                 </button>
+                 <span className="font-sans text-[10px] text-on-surface-variant text-center px-1">Backup lengkap semua data Lootly.</span>
+              </div>
+              <div className="flex flex-col gap-1">
+                 <button onClick={handleExportCSV} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-blue-400 bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white cursor-pointer hover:shadow-lg">
+                   <Download className="w-4 h-4" /> Export CSV
+                 </button>
+                 <span className="font-sans text-[10px] text-on-surface-variant text-center px-1">Export riwayat trade ke Excel/Google Sheets.</span>
+              </div>
             </div>
             
             <div className="w-full h-px bg-white/5 my-1" />
             
-            <button onClick={handleImport} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-primary bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white w-full cursor-pointer hover:shadow-lg">
-               <Upload className="w-4 h-4" /> Import Data
-            </button>
+            <div className="flex flex-col gap-1">
+               <button onClick={handleImport} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-primary bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white w-full cursor-pointer hover:shadow-lg">
+                  <Upload className="w-4 h-4" /> Import Data
+               </button>
+               <span className="font-sans text-[10px] text-on-surface-variant text-center">Pulihkan data dari file backup JSON.</span>
+            </div>
 
-            <div className="mt-auto pt-4 border-t border-error/20">
+            <div className="mt-auto pt-4 border-t border-error/20 flex flex-col gap-1">
                <button 
                   onClick={() => {
-                     if(window.confirm("Kamu yakin? Semua modal trade dan review akan dihapus!")) {
+                     if(window.confirm("Hapus semua data Lootly? Akses ke data sebelumnya akan hilang secara permanen.")) {
                          resetAllData();
                          alert("Semua data berhasil direset.");
                      }
                   }}
                   className="flex items-center justify-center gap-2 py-2 px-4 border border-error/30 bg-error/10 hover:bg-error/20 text-error rounded-lg transition-all font-display text-xs uppercase tracking-wider w-full cursor-pointer hover:shadow-lg"
                >
-                 <Trash2 className="w-4 h-4" /> RESET ALL DATA
+                 <Trash2 className="w-4 h-4" /> Reset Data
                </button>
+               <span className="font-sans text-[10px] text-on-surface-variant text-center">Hapus semua data Lootly.</span>
             </div>
           </div>
         </section>
@@ -337,7 +348,7 @@ export function Settings() {
                onClick={handleSave}
                className="bg-primary cursor-pointer hover:bg-primary-container text-[#00391f] font-display text-xs font-bold uppercase tracking-widest py-3 px-8 rounded-lg shadow-[0_0_15px_rgba(68,224,146,0.2)] hover:shadow-[0_0_20px_rgba(68,224,146,0.4)] transition-all transform active:scale-95 flex items-center gap-2"
             >
-               <Save className="w-4 h-4" /> Save Settings
+               <Save className="w-4 h-4" /> Simpan Pengaturan
             </button>
         </div>
 

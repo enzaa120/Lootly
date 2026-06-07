@@ -10,7 +10,8 @@ import {
   Menu,
   Wallet,
   CalendarCheck,
-  ChevronDown
+  ChevronDown,
+  Newspaper
 } from "lucide-react";
 import { useAppStore } from "../../store/AppContext";
 import { useState, useRef, useEffect } from "react";
@@ -22,12 +23,13 @@ export function AppLayout() {
   const dropdownRef = useRef<HTMLDivElement>(null);
   
   const navItems = [
-    { name: "Home", path: "/", icon: LayoutDashboard },
-    { name: "Journal", path: "/journal", icon: BookOpen },
-    { name: "Add", path: "/add", icon: PlusCircle, highlight: true },
-    { name: "Reviews", path: "/reviews", icon: CalendarCheck },
-    { name: "Analytics", path: "/analytics", icon: BarChart2 },
-    { name: "Settings", path: "/settings", icon: Settings },
+    { name: "Beranda", path: "/", icon: LayoutDashboard },
+    { name: "News", path: "/news", icon: Newspaper },
+    { name: "Jurnal", path: "/journal", icon: BookOpen },
+    { name: "Tambah Trade", path: "/add", icon: PlusCircle, highlight: true },
+    { name: "Evaluasi", path: "/reviews", icon: CalendarCheck },
+    { name: "Analitik", path: "/analytics", icon: BarChart2 },
+    { name: "Pengaturan", path: "/settings", icon: Settings },
   ];
 
   useEffect(() => {

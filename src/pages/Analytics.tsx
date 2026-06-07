@@ -1,5 +1,5 @@
 import { useAppStore } from "../store/AppContext";
-import { formatCurrency } from "../lib/utils";
+import { formatCurrency, calculateDisciplineScore } from "../lib/utils";
 import { TrendingUp, TrendingDown, Star, BrainCircuit } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Area, AreaChart } from 'recharts';
 
@@ -42,6 +42,10 @@ export function Analytics() {
        if (t.disciplineScore !== undefined) {
            totalDisciplineScore += t.disciplineScore;
            totalWithScore++;
+       } else {
+           const score = calculateDisciplineScore(t, settings.maxDailyLossPercent);
+           totalDisciplineScore += score;
+           totalWithScore++;
        }
        
        if (t.setupType) {
@@ -78,11 +82,11 @@ export function Analytics() {
     <div className="px-4 md:px-8 max-w-7xl mx-auto w-full pb-8 pt-4">
       
       <div className="md:hidden flex items-center justify-between mb-2">
-        <h1 className="font-display text-4xl font-bold text-white tracking-tighter">Analytics</h1>
+        <h1 className="font-display text-4xl font-bold text-white tracking-tighter">Analitik</h1>
       </div>
 
       <div className="hidden md:flex items-center justify-between mb-8 pb-4 border-b border-white/5">
-        <h1 className="font-display text-4xl font-bold text-white tracking-tighter">Analytics Dashboard</h1>
+        <h1 className="font-display text-4xl font-bold text-white tracking-tighter">Dashboard Analitik</h1>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6 mb-8">
@@ -92,7 +96,7 @@ export function Analytics() {
           <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-40 transition-opacity">
             <TrendingUp className="w-12 h-12 text-primary" />
           </div>
-          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Best Day</span>
+          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Hari Terbaik</span>
           <div className="flex items-baseline gap-2 z-10">
             <span className="font-mono text-2xl md:text-xl lg:text-2xl text-primary font-bold">
                {hasTrades && bestDay.pnl !== -Infinity ? `+${formatCurrency(bestDay.pnl, 'IDR')}` : 'Belum ada data'}
@@ -107,7 +111,7 @@ export function Analytics() {
           <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-40 transition-opacity">
             <TrendingDown className="w-12 h-12 text-error" />
           </div>
-          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Worst Day</span>
+          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Hari Terburuk</span>
           <div className="flex items-baseline gap-2 z-10">
             <span className="font-mono text-2xl md:text-xl lg:text-2xl text-error font-bold">
                {hasTrades && worstDay.pnl !== Infinity ? formatCurrency(worstDay.pnl, 'IDR') : 'Belum ada data'}
@@ -122,7 +126,7 @@ export function Analytics() {
           <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-40 transition-opacity">
             <Star className="w-12 h-12 text-[#adc6ff]" />
           </div>
-          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Best Setup</span>
+          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Setup Terbaik</span>
           <div className="flex items-baseline gap-2 z-10 mt-auto">
              <span className="font-sans text-lg md:text-lg text-white font-bold">{bestSetup}</span>
           </div>
@@ -135,13 +139,17 @@ export function Analytics() {
           <div className="absolute top-0 right-0 p-3 opacity-20 group-hover:opacity-40 transition-opacity">
             <BrainCircuit className="w-12 h-12 text-[#4b8eff]" />
           </div>
-          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Avg Discipline Score</span>
+          <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant z-10 font-bold">Rata-rata Skor Disiplin</span>
            <div className="flex items-baseline gap-2 z-10 mt-auto">
              <span className="font-mono text-2xl md:text-3xl text-[#adc6ff] font-bold">{avgDiscipline}/10</span>
           </div>
-          <div className="w-full bg-[#161d18] h-1 rounded-full overflow-hidden z-10">
-            <div className="bg-[#adc6ff] h-full transition-all" style={{width: `${(Number(avgDiscipline) / 10) * 100}%`}}></div>
-          </div>
+          {!hasTrades ? (
+            <p className="font-sans text-[10px] text-on-surface-variant z-10 mt-1 italic">Belum ada data disiplin. Catat trade dulu agar Lootly bisa membaca pola disiplin kamu.</p>
+          ) : (
+            <div className="w-full bg-[#161d18] h-1 rounded-full overflow-hidden z-10">
+              <div className="bg-[#adc6ff] h-full transition-all" style={{width: `${(Number(avgDiscipline) / 10) * 100}%`}}></div>
+            </div>
+          )}
         </div>
 
       </div>
@@ -151,7 +159,7 @@ export function Analytics() {
         {/* Equity Curve */}
         <div className="glass-panel rounded-xl p-6 lg:col-span-8 flex flex-col h-[400px]">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="font-display text-lg text-white font-semibold flex items-center gap-2">Equity Curve</h2>
+            <h2 className="font-display text-lg text-white font-semibold flex items-center gap-2">Kurva Equity</h2>
             <div className="flex gap-1 bg-[#161d18] rounded-lg p-1">
               <button className="px-3 py-1 font-mono text-xs text-on-surface-variant hover:text-white rounded">1M</button>
               <button className="px-3 py-1 font-mono text-xs text-on-surface-variant hover:text-white rounded">3M</button>
@@ -190,7 +198,7 @@ export function Analytics() {
 
         {/* Winrate Donut */}
         <div className="glass-panel rounded-xl p-6 lg:col-span-4 flex flex-col h-[400px]">
-           <h2 className="font-display text-lg text-white font-semibold mb-6">Winrate by Asset</h2>
+           <h2 className="font-display text-lg text-white font-semibold mb-6">Winrate per Aset</h2>
            {!hasTrades ? (
                <div className="flex-1 flex items-center justify-center text-on-surface-variant font-sans text-sm italic">
                   Belum ada data

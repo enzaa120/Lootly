@@ -1,14 +1,17 @@
 import { useState, useEffect } from "react";
 import { useAppStore } from "../store/AppContext";
-import { useNavigate } from "react-router-dom";
-import { AssetType, TradeDirection, TradeResult, EmotionType, MistakeType } from "../types";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { AssetType, TradeDirection, TradeResult, EmotionType, MistakeType, NewsEvent } from "../types";
 import { WarningPanel } from "../components/ui/Globals";
-import { formatCurrency } from "../lib/utils";
+import { formatCurrency, calculateDisciplineScore } from "../lib/utils";
 import { TrendingUp, TrendingDown, Target, Save, X, Calendar as CalendarIcon, Check } from "lucide-react";
 
 export function AddTrade() {
-  const { accountMode, settings, addTrade } = useAppStore();
+  const { accountMode, settings, trades, updateTrade, addTrade } = useAppStore();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const editId = searchParams.get('edit');
+  const duplicateId = searchParams.get('duplicate');
 
   // Primary State
   const [asset, setAsset] = useState<AssetType>("XAU/USD");
@@ -47,8 +50,45 @@ export function AddTrade() {
   const [emotionAfter, setEmotionAfter] = useState<EmotionType>("Calm");
   const [mentalStateNotes, setMentalStateNotes] = useState<string>("");
   const [mistakes, setMistakes] = useState<MistakeType[]>([]);
-  const [disciplineScore, setDisciplineScore] = useState<number>(10);
   const [lessonLearned, setLessonLearned] = useState<string>("");
+  const [followedPlan, setFollowedPlan] = useState<"belum" | "ya" | "tidak">("belum");
+
+  useEffect(() => {
+    const sourceId = editId || duplicateId;
+    if (sourceId) {
+      const sourceTrade = trades.find(t => t.id === sourceId);
+      if (sourceTrade) {
+        setAsset(sourceTrade.asset);
+        setDirection(sourceTrade.direction);
+        setStatus(duplicateId ? "planned" : sourceTrade.status);
+        setLot(sourceTrade.lot);
+        setEntryPrice(sourceTrade.entryPlan.toString());
+        setStopLoss(sourceTrade.slPlan.toString());
+        if (sourceTrade.tp1Plan !== undefined) setTakeProfit(sourceTrade.tp1Plan.toString());
+        
+        setTimeframe(sourceTrade.timeframe || "M15");
+        setSetupType(sourceTrade.setupType || "Pullback EMA");
+        setEntryReason(sourceTrade.entryReason || "");
+        setBias(sourceTrade.bias || "Bullish");
+        
+        if (sourceTrade.checklist) {
+           setChecklist(prev => ({ ...prev, ...sourceTrade.checklist }));
+        }
+
+        if (!duplicateId) {
+           setResult(sourceTrade.result || "win");
+           setEmotionBefore(sourceTrade.emotionBefore || "Calm");
+           setEmotionAfter(sourceTrade.emotionAfter || "Calm");
+           setMentalStateNotes(sourceTrade.mentalStateNotes || "");
+           setMistakes(sourceTrade.mistakes || []);
+           setLessonLearned(sourceTrade.lessonLearned || "");
+           setFollowedPlan(sourceTrade.followedPlan === true ? "ya" : (sourceTrade.followedPlan === false ? "tidak" : "belum"));
+        } else {
+           setEntryReason((sourceTrade.entryReason ? sourceTrade.entryReason + "\n\n" : "") + "[Duplicated Trade]");
+        }
+      }
+    }
+  }, [editId, duplicateId, trades]);
   
   // Calculations
   const inst = settings.instruments[asset];
@@ -85,6 +125,14 @@ export function AddTrade() {
   
   const riskExceeded = riskPercent > settings.maxDailyLossPercent;
 
+  const autoScore = calculateDisciplineScore({
+    actualSL: parseFloat(stopLoss),
+    checklist,
+    riskPercent,
+    followedPlan: followedPlan === "belum" ? undefined : (followedPlan === "ya" ? true : false),
+    mistakes,
+  }, settings.maxDailyLossPercent);
+
   const handleSave = () => {
     // Show warnings as prompts or alert if critical
     if (isNaN(sl)) {
@@ -99,10 +147,9 @@ export function AddTrade() {
       return;
     }
 
-    const newId = addTrade({
+    const tradeData = {
       accountMode: accountMode,
       status: status,
-      date: new Date().toISOString(),
       asset: asset,
       tradingViewSymbol: inst.tradingViewSymbol,
       direction: direction,
@@ -132,13 +179,23 @@ export function AddTrade() {
       mentalStateNotes: mentalStateNotes,
       checklist: checklist,
       mistakes: mistakes,
-      disciplineScore: disciplineScore,
-      lessonLearned: lessonLearned
-    });
-    
-    // Simulate toast
-    alert("Trade berhasil disimpan.");
-    navigate(`/journal/${newId}`);
+      disciplineScore: autoScore,
+      lessonLearned: lessonLearned,
+      followedPlan: followedPlan === "belum" ? undefined : (followedPlan === "ya" ? true : false)
+    };
+
+    if (editId) {
+      updateTrade(editId, tradeData);
+      alert("Trade berhasil diperbarui.");
+      navigate(`/journal/${editId}`);
+    } else {
+      const newId = addTrade({
+        ...tradeData,
+        date: new Date().toISOString()
+      });
+      alert(duplicateId ? "Trade berhasil diduplikat." : "Trade berhasil disimpan.");
+      navigate(`/journal/${newId}`);
+    }
   };
 
   const toggleChecklist = (key: keyof typeof checklist) => {
@@ -153,6 +210,39 @@ export function AddTrade() {
      }
   };
 
+  // Mistake translation mappings
+  const mistakeLabels: Record<MistakeType, string> = {
+    "FOMO": "FOMO",
+    "Revenge Trade": "Revenge Trade / Balas Dendam",
+    "Early Entry": "Entry Terlalu Cepat",
+    "Late Entry": "Entry Terlalu Telat",
+    "Oversized Lot": "Lot Terlalu Besar",
+    "No SL": "Tanpa Stop Loss",
+    "SL Too Tight": "Stop Loss Terlalu Mepet",
+    "Against Trend": "Melawan Trend",
+    "News Spike": "Kena News Spike",
+    "Overtrade": "Overtrade",
+    "Chasing Candle": "Kejar Candle",
+    "Closed Too Early": "Close Terlalu Cepat",
+    "Held Too Long": "Tahan Posisi Terlalu Lama"
+  };
+
+  const [todayHighImpactNews, setTodayHighImpactNews] = useState(false);
+
+  useEffect(() => {
+    const savedNews = localStorage.getItem("Lootly.newsEvents");
+    if (savedNews) {
+      try {
+        const events = JSON.parse(savedNews) as NewsEvent[];
+        const todaysDate = new Date().toISOString().split("T")[0];
+        const hasHighImpactToday = events.some(n => n.date === todaysDate && n.impact === "High" && !n.isDone);
+        setTodayHighImpactNews(hasHighImpactToday);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }, []);
+
   return (
     <div className="px-4 md:px-8 max-w-5xl mx-auto w-full pb-8 pt-4">
       <div className="flex items-center justify-between mb-8 sticky top-16 md:top-0 z-30 bg-[#0e1510] py-4 border-b border-white/5">
@@ -160,7 +250,7 @@ export function AddTrade() {
           <button onClick={() => navigate(-1)} className="text-on-surface-variant hover:text-white transition-colors cursor-pointer">
             <X className="w-6 h-6" />
           </button>
-          <h1 className="font-display text-2xl font-bold text-on-surface">New Trade Entry</h1>
+          <h1 className="font-display text-2xl font-bold text-on-surface">{editId ? "Edit Trade" : "New Trade Entry"}</h1>
         </div>
         <button 
           onClick={handleSave}
@@ -173,6 +263,13 @@ export function AddTrade() {
       <div className="flex flex-col gap-6">
 
         {/* Warnings */}
+        {todayHighImpactNews && (
+          <WarningPanel 
+            title="News Alert" 
+            message="Ada high impact news hari ini. Pastikan entry tidak dekat jam news." 
+            type="warning" 
+          />
+        )}
         {accountMode === 'real' && riskExceeded && (
           <WarningPanel 
             title="Max Risk Exceeded" 
@@ -196,7 +293,7 @@ export function AddTrade() {
             
             {/* 1. Trade Identity */}
             <section className="glass-panel rounded-xl p-6">
-              <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Trade Identity</h2>
+              <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Identitas Trade</h2>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="flex flex-col gap-1.5">
@@ -250,11 +347,11 @@ export function AddTrade() {
 
              {/* 2. Pre-Trade Plan */}
             <section className="glass-panel rounded-xl p-6">
-              <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Pre-Trade Plan</h2>
+              <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Rencana Sebelum Entry</h2>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <div className="flex flex-col gap-1.5">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Market Bias</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Bias Market</label>
                   <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none outline-none focus:ring-1 focus:ring-primary/40 cursor-pointer" value={bias} onChange={e => setBias(e.target.value)}>
                     <option>Bullish</option>
                     <option>Bearish</option>
@@ -262,7 +359,7 @@ export function AddTrade() {
                   </select>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Setup Type</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Jenis Setup</label>
                   <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none outline-none focus:ring-1 focus:ring-primary/40 cursor-pointer" value={setupType} onChange={e => setSetupType(e.target.value)}>
                     <option>Pullback EMA</option>
                     <option>Retest VWAP</option>
@@ -274,28 +371,29 @@ export function AddTrade() {
               </div>
               
               <div className="flex flex-col gap-1.5 mb-6">
-                 <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Entry Reason & Thesis</label>
+                 <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Alasan Entry</label>
                  <textarea 
                    className="glass-input w-full rounded-lg px-4 py-3 text-white font-sans min-h-[100px] resize-none outline-none focus:ring-1 focus:ring-primary/40"
-                   placeholder="Review your trading plan. Why are you entering here?"
+                   placeholder="Tulis alasan entry kamu. Kenapa setup ini layak diambil?"
                    value={entryReason} onChange={e => setEntryReason(e.target.value)}
                  />
               </div>
 
                <div className="bg-[#161d18] border border-white/5 rounded-lg p-4">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant block mb-3">Confluence Checklist</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant block mb-1">Checklist Validasi Entry</label>
+                  <p className="font-sans text-xs text-on-surface-variant/70 mb-4">Checklist ini membantu memastikan entry kamu punya cukup konfirmasi sebelum masuk market.</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                      {[
-                       { key: 'm30Checked', label: "M30 Direction Aligned" },
-                       { key: 'm15Checked', label: "M15 Confirmation" },
-                       { key: 'nearSnr', label: "Price near S/R" },
-                       { key: 'nearVwap', label: "Price near VWAP" },
-                       { key: 'emaSupports', label: "EMA 50/200 Supports" },
-                       { key: 'atrAcceptable', label: "ATR Acceptable" },
-                       { key: 'slClear', label: "Stop Loss is Clear" },
-                       { key: 'riskAcceptable', label: "Risk is Acceptable" },
-                       { key: 'notRevenge', label: "Not Revenge Trading" },
-                       { key: 'notChasingCandle', label: "Not Chasing Candle" },
+                       { key: 'm30Checked', label: "Arah M30 sudah sesuai" },
+                       { key: 'm15Checked', label: "M15 sudah konfirmasi" },
+                       { key: 'nearSnr', label: "Harga dekat S/R" },
+                       { key: 'nearVwap', label: "Harga dekat VWAP" },
+                       { key: 'emaSupports', label: "EMA 50/200 mendukung" },
+                       { key: 'atrAcceptable', label: "ATR masih aman" },
+                       { key: 'slClear', label: "Stop Loss jelas" },
+                       { key: 'riskAcceptable', label: "Risiko masih aman" },
+                       { key: 'notRevenge', label: "Bukan revenge trade" },
+                       { key: 'notChasingCandle', label: "Tidak kejar candle" },
                      ].map(item => (
                         <label 
                            key={item.key} 
@@ -315,40 +413,40 @@ export function AddTrade() {
 
             {/* 3. Psychology Section */}
             <section className="glass-panel rounded-xl p-6">
-               <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Psychology</h2>
+               <h2 className="font-display text-lg text-white mb-4 border-b border-white/5 pb-2">Psikologi</h2>
                
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                   <div className="flex flex-col gap-1.5">
-                    <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Emotion Before Trade</label>
+                    <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Emosi Sebelum Entry</label>
                     <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none cursor-pointer" value={emotionBefore} onChange={e => setEmotionBefore(e.target.value as EmotionType)}>
-                      <option value="Calm">Calm</option>
-                      <option value="Confident">Confident</option>
-                      <option value="Doubtful">Doubtful</option>
+                      <option value="Calm">Tenang</option>
+                      <option value="Confident">Percaya Diri</option>
+                      <option value="Doubtful">Ragu</option>
                       <option value="FOMO">FOMO</option>
-                      <option value="Revenge">Revenge</option>
-                      <option value="Greedy">Greedy</option>
-                      <option value="Afraid">Afraid</option>
-                      <option value="Tired">Tired</option>
-                      <option value="Forced Entry">Forced Entry</option>
+                      <option value="Revenge">Balas Dendam</option>
+                      <option value="Greedy">Serakah</option>
+                      <option value="Afraid">Takut</option>
+                      <option value="Tired">Lelah</option>
+                      <option value="Forced Entry">Entry Terpaksa</option>
                     </select>
                   </div>
                   <div className="flex flex-col gap-1.5">
-                    <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Emotion After Trade</label>
+                    <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Emosi Setelah Entry</label>
                     <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none cursor-pointer" value={emotionAfter} onChange={e => setEmotionAfter(e.target.value as EmotionType)}>
-                      <option value="Calm">Calm</option>
-                      <option value="Satisfied">Satisfied</option>
-                      <option value="Regret">Regret</option>
-                      <option value="Angry">Angry</option>
-                      <option value="Greedy">Greedy</option>
-                      <option value="Afraid">Afraid</option>
-                      <option value="Relieved">Relieved</option>
-                      <option value="Disappointed">Disappointed</option>
+                      <option value="Calm">Tenang</option>
+                      <option value="Satisfied">Puas</option>
+                      <option value="Regret">Menyesal</option>
+                      <option value="Angry">Marah</option>
+                      <option value="Greedy">Serakah</option>
+                      <option value="Afraid">Takut</option>
+                      <option value="Relieved">Lega</option>
+                      <option value="Disappointed">Kecewa</option>
                     </select>
                   </div>
                </div>
 
                <div className="flex flex-col gap-1.5 mb-6">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Mental State Notes</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Catatan Kondisi Mental</label>
                   <textarea 
                     className="glass-input w-full rounded-lg px-4 py-3 text-white font-sans min-h-[80px] resize-none outline-none focus:ring-1 focus:ring-primary/40"
                     placeholder="Apa kondisi pikiran kamu sebelum/sesudah entry?"
@@ -356,31 +454,42 @@ export function AddTrade() {
                   />
                </div>
 
-               <div className="flex flex-col gap-1.5 mb-6">
+               <div className="flex flex-col gap-1.5 mb-6 bg-[#161d18] border border-white/5 rounded-lg p-4">
                   <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant flex justify-between">
-                     Discipline Score 
-                     <span className={disciplineScore >= 7 ? 'text-primary' : disciplineScore >= 4 ? 'text-yellow-500' : 'text-error'}>{disciplineScore}/10</span>
+                     Skor Disiplin Otomatis 
+                     <span className={autoScore >= 8.5 ? 'text-[#32c882]' : autoScore >= 7 ? 'text-[#4b8eff]' : autoScore >= 4 ? 'text-yellow-500' : 'text-error'}>{autoScore}/10</span>
                   </label>
-                  <input type="range" min="1" max="10" value={disciplineScore} onChange={e => setDisciplineScore(Number(e.target.value))} className="w-full accent-primary cursor-pointer"/>
+                  <p className="font-sans text-xs text-on-surface-variant/70 mt-1">1 = tidak disiplin, 10 = sangat disiplin. Skor dihitung otomatis dari checklist, risk, Stop Loss, dan kepatuhan pada plan.</p>
                </div>
 
                <div className="flex flex-col gap-1.5 mb-6">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant mb-1">Mistake Tags (If any)</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant mb-1">Tag Kesalahan (Jika ada)</label>
                   <div className="flex flex-wrap gap-2">
-                     {["FOMO", "Revenge Trade", "Early Entry", "Late Entry", "Oversized Lot", "No SL", "SL Too Tight", "Against Trend", "News Spike", "Overtrade", "Chasing Candle", "Closed Too Early", "Held Too Long"].map(tag => (
+                     {(Object.keys(mistakeLabels) as MistakeType[]).map(tag => (
                         <button
                            key={tag}
-                           onClick={() => toggleMistake(tag as MistakeType)}
-                           className={`px-3 py-1.5 rounded-full font-sans text-xs transition-colors cursor-pointer border ${mistakes.includes(tag as MistakeType) ? 'bg-[#ff3b30]/20 text-[#ff3b30] border-[#ff3b30]/30' : 'bg-[#161d18] text-on-surface-variant border-white/5 hover:border-white/20'}`}
+                           onClick={() => toggleMistake(tag)}
+                           className={`px-3 py-1.5 rounded-full font-sans text-xs transition-colors cursor-pointer border ${mistakes.includes(tag) ? 'bg-[#ff3b30]/20 text-[#ff3b30] border-[#ff3b30]/30' : 'bg-[#161d18] text-on-surface-variant border-white/5 hover:border-white/20'}`}
                         >
-                           {tag}
+                           {mistakeLabels[tag]}
                         </button>
                      ))}
                   </div>
                </div>
 
+               {status === "closed" && (
+                 <div className="flex flex-col gap-1.5 mb-6">
+                    <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Entry sesuai plan?</label>
+                    <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none cursor-pointer" value={followedPlan} onChange={e => setFollowedPlan(e.target.value as any)}>
+                      <option value="belum">Belum direview</option>
+                      <option value="ya">Ya</option>
+                      <option value="tidak">Tidak</option>
+                    </select>
+                 </div>
+               )}
+
                <div className="flex flex-col gap-1.5">
-                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Lesson Learned</label>
+                  <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Pelajaran dari Trade Ini</label>
                   <textarea 
                     className="glass-input w-full rounded-lg px-4 py-3 text-white font-sans min-h-[80px] resize-none outline-none focus:ring-1 focus:ring-primary/40"
                     placeholder="Apa pelajaran dari trade ini?"
@@ -395,14 +504,14 @@ export function AddTrade() {
              <section className="glass-panel rounded-xl p-6 shadow-xl flex flex-col sticky top-24">
                 <div className="flex items-center gap-2 border-b border-white/5 pb-2 mb-4">
                   <Target className="text-[#4b8eff] w-5 h-5" />
-                  <h2 className="font-display text-lg text-white">Execution</h2>
+                  <h2 className="font-display text-lg text-white">Eksekusi</h2>
                 </div>
 
                 <div className="space-y-4 flex-1">
                    {/* Risk Slider visual purely informational here since risk is derived from lot & SL */}
                    <div className="flex flex-col gap-1.5">
                       <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant flex justify-between">
-                         Derived Risk %
+                         Risiko / Derived Risk %
                          <span className={riskExceeded ? 'text-error' : 'text-primary'}>{riskPercent.toFixed(2)}%</span>
                       </label>
                       <div className="h-1 bg-[#242c26] rounded-full overflow-hidden mt-1">
@@ -439,9 +548,18 @@ export function AddTrade() {
                       <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant mb-1">Risk:Reward</span>
                       <span className="font-mono text-lg text-white">{rrRatio > 0 ? `1:${rrRatio.toFixed(2)}` : '--'}</span>
                    </div>
-                   <div className="bg-[#161d18] rounded-lg p-3 flex flex-col items-center justify-center border border-white/5">
-                      <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant mb-1">Proj. P/L</span>
-                      <span className={`font-mono text-lg ${pnlIdr >= 0 ? 'text-primary' : 'text-error'}`}>{pnlIdr ? formatCurrency(Math.abs(pnlIdr), 'IDR') : '--'}{(pnlIdr < 0) ? '-' : (pnlIdr > 0 ? '+' : '')}</span>
+                   <div className="bg-[#161d18] rounded-lg p-3 flex flex-col items-center justify-center border border-white/5 col-span-2">
+                      <div className="flex justify-between w-full items-center mb-1">
+                         <span className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Estimasi Profit/Loss</span>
+                         <span className={`font-mono text-lg font-bold ${pnlIdr >= 0 ? 'text-primary' : 'text-error'}`}>
+                           {pnlIdr ? (pnlIdr >= 0 ? '+' : '-') + formatCurrency(Math.abs(pnlIdr), 'IDR') : '--'}
+                         </span>
+                      </div>
+                      {pnlIdr ? (
+                         <div className="w-full text-right mt-1">
+                            <span className="font-sans text-[10px] text-on-surface-variant">Saldo Setelah Trade: {formatCurrency(balance + pnlIdr, 'IDR')}</span>
+                         </div>
+                      ) : null}
                    </div>
                 </div>
 
@@ -449,7 +567,7 @@ export function AddTrade() {
                 {status === "closed" && (
                    <div className="mt-4 pt-4 border-t border-white/5">
                        <div className="flex flex-col gap-1.5">
-                        <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Final Result</label>
+                        <label className="font-display text-[10px] uppercase tracking-wider text-on-surface-variant">Hasil Akhir</label>
                         <select className="glass-input w-full rounded-lg px-4 py-2.5 text-white font-sans appearance-none cursor-pointer" value={result} onChange={e => setResult(e.target.value as TradeResult)}>
                           <option value="win">Win</option>
                           <option value="loss">Loss</option>

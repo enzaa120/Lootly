@@ -27,6 +27,22 @@ export type TradeDirection = "buy" | "sell";
 export type EmotionType = "Calm" | "Confident" | "Doubtful" | "FOMO" | "Revenge" | "Greedy" | "Afraid" | "Tired" | "Forced Entry" | "Satisfied" | "Regret" | "Angry" | "Relieved" | "Disappointed";
 export type MistakeType = "FOMO" | "Revenge Trade" | "Early Entry" | "Late Entry" | "Oversized Lot" | "No SL" | "SL Too Tight" | "Against Trend" | "News Spike" | "Overtrade" | "Chasing Candle" | "Closed Too Early" | "Held Too Long";
 
+export interface NewsEvent {
+  id: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM
+  currency: "USD" | "EUR" | "GBP" | "JPY" | "AUD" | "CAD" | "CHF" | "CNY" | "Other";
+  impact: "Low" | "Medium" | "High";
+  eventName: string;
+  forecast?: string;
+  previous?: string;
+  actual?: string;
+  notes?: string;
+  relevantAsset: "XAU/USD" | "BTC/USD" | "Both";
+  tradingRule: string;
+  isDone?: boolean;
+}
+
 export interface Trade {
   id: string;
   accountMode: AccountMode;

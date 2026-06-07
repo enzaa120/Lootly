@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useAppStore } from "../store/AppContext";
 import { useRandomQuote } from "../hooks/useQuotes";
 import { TradingViewChart } from "../components/ui/TradingViewWidget";
@@ -5,13 +6,28 @@ import { Badge, WarningPanel } from "../components/ui/Globals";
 import { formatCurrency } from "../lib/utils";
 import { ArrowUpRight, Target, PieChart, Scale, Wallet, AlertTriangle } from "lucide-react";
 import { startOfDay, isToday } from "date-fns";
-import { AssetType } from "../types";
+import { AssetType, NewsEvent } from "../types";
 import { useNavigate } from "react-router-dom";
 
 export function Dashboard() {
   const { accountMode, setAccountMode, selectedAsset, setSelectedAsset, settings, trades, transactions } = useAppStore();
   const quote = useRandomQuote();
   const navigate = useNavigate();
+  const [todayHighImpactNews, setTodayHighImpactNews] = useState(false);
+
+  useEffect(() => {
+    const savedNews = localStorage.getItem("Lootly.newsEvents");
+    if (savedNews) {
+      try {
+        const events: NewsEvent[] = JSON.parse(savedNews);
+        const todaysDate = new Date().toISOString().split("T")[0];
+        const hasHighImpactToday = events.some(n => n.date === todaysDate && n.impact === "High" && !n.isDone);
+        setTodayHighImpactNews(hasHighImpactToday);
+      } catch (e) {
+        // ignore
+      }
+    }
+  }, []);
 
   const modeTrades = trades.filter((t) => t.accountMode === accountMode);
   const modeTransactions = transactions.filter((t) => t.accountMode === accountMode);
@@ -78,6 +94,11 @@ export function Dashboard() {
       </div>
 
       {/* Warnings */}
+      {todayHighImpactNews && (
+        <div className="mb-8 cursor-pointer" onClick={() => navigate('/news')} role="button" tabIndex={0}>
+           <WarningPanel title="News Hari Ini" message="High impact news hari ini. Jangan entry tanpa cek kalender." type="error" />
+        </div>
+      )}
       {todayLosses >= settings.stopAfterLosses && (
         <div className="mb-8 cursor-pointer" onClick={() => navigate('/reviews')} role="button" tabIndex={0}>
            <WarningPanel title="Trading Limit Reached" message="Dua kali loss cukup. Besok masih ada market. Review Hari Ini." type="warning" />
@@ -95,7 +116,7 @@ export function Dashboard() {
         {/* Total Balance Card */}
         <div className="glass-panel rounded-xl p-5 col-span-2 flex flex-col justify-between min-h-[140px] cursor-pointer hover:border-primary/50 transition-colors" onClick={() => navigate('/settings')} role="button" tabIndex={0}>
           <div className="flex items-center gap-2 text-on-surface-variant font-display text-xs uppercase tracking-wider font-semibold">
-            <Wallet className="w-4 h-4" /> TOTAL BALANCE (IDR)
+            <Wallet className="w-4 h-4" /> SALDO TOTAL (IDR)
           </div>
           <div>
             <div className="font-mono text-3xl md:text-4xl text-white mt-3 font-bold">
@@ -103,7 +124,7 @@ export function Dashboard() {
             </div>
             <div className={`font-mono text-sm mt-1 flex items-center gap-1 ${totalPnlIdr >= 0 ? 'text-primary' : 'text-error'}`}>
               <ArrowUpRight className="w-4 h-4" /> 
-              {totalPnlIdr >= 0 ? '+' : ''}{formatCurrency(totalPnlIdr, 'IDR')} All Time
+              {totalPnlIdr >= 0 ? '+' : ''}{formatCurrency(totalPnlIdr, 'IDR')} Sepanjang Waktu
             </div>
           </div>
         </div>
@@ -112,7 +133,7 @@ export function Dashboard() {
         <div className="glass-panel rounded-xl p-5 col-span-2 flex flex-col justify-between min-h-[140px] cursor-pointer hover:border-primary/50 transition-colors" onClick={() => navigate('/settings')} role="button" tabIndex={0}>
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2 text-on-surface-variant font-display text-xs uppercase tracking-wider font-semibold">
-              <Target className="w-4 h-4" /> TARGET PROGRESS
+              <Target className="w-4 h-4" /> PROGRESS TARGET
             </div>
             <span className="font-mono text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">
               {targetProgress.toFixed(1)}%
@@ -138,7 +159,7 @@ export function Dashboard() {
         {/* Avg RR */}
         <div className="glass-panel rounded-xl p-5 col-span-1 flex flex-col justify-between min-h-[140px] cursor-pointer hover:border-primary/50 transition-colors" onClick={() => navigate('/analytics')} role="button" tabIndex={0}>
           <div className="text-on-surface-variant font-display text-xs uppercase tracking-wider font-semibold flex items-center gap-2">
-            <Scale className="w-4 h-4" /> AVG RR
+            <Scale className="w-4 h-4" /> RATA-RATA RR
           </div>
           <div className="font-mono text-3xl text-white font-bold">1:{avgRR}</div>
         </div>
@@ -150,12 +171,12 @@ export function Dashboard() {
         <div className="lg:col-span-8 glass-panel rounded-xl p-5 flex flex-col overflow-hidden relative">
            <div className="flex justify-between items-center mb-6">
               <h3 className="font-display text-lg text-white font-semibold flex items-center gap-2 cursor-pointer hover:text-primary transition-colors" onClick={() => navigate('/journal')} role="button" tabIndex={0}>
-                Recent Executions <ArrowUpRight className="w-4 h-4" />
+                Riwayat Terbaru <ArrowUpRight className="w-4 h-4" />
               </h3>
           </div>
           {closedTrades.length === 0 ? (
              <div className="flex-1 flex items-center justify-center text-on-surface-variant opacity-70 italic font-sans text-sm cursor-pointer" onClick={() => navigate('/add')} role="button">
-                No closed trades yet in {accountMode} mode. Click here to add.
+                Belum ada trade yang dicatat di akun {accountMode}. Klik di sini untuk tambah trade pertama.
              </div>
           ) : (
             <div className="overflow-x-auto">
