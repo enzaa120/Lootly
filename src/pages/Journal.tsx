@@ -434,10 +434,10 @@ export function Journal() {
               }}
               tabIndex={0}
               role="button"
-              className="glass-panel rounded-xl p-4 flex flex-col gap-3 relative overflow-hidden cursor-pointer hover:border-primary/30 active:scale-[0.99] transition-all focus:outline-none focus:ring-1 focus:ring-primary/40"
+              className="glass-panel rounded-xl p-4 flex flex-col gap-3 relative cursor-pointer hover:border-primary/30 active:scale-[0.99] transition-all focus:outline-none focus:ring-1 focus:ring-primary/40"
             >
               <div
-                className={`absolute top-0 left-0 w-1 h-full ${
+                className={`absolute top-0 left-0 w-1 h-full rounded-l-xl ${
                   trade.result === "win"
                     ? "bg-primary"
                     : trade.result === "loss"

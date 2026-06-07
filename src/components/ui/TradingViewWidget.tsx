@@ -14,23 +14,15 @@ const normalizeSymbol = (symbol: string) => {
 
 export function TradingViewChart({
   symbol = "OANDA:XAUUSD",
-  height = 360,
+  height, // Make optional without default, use className for responsive sizing
   className = "",
 }: TradingViewChartProps) {
   const [iframeLoaded, setIframeLoaded] = useState(false);
-  const [showHelp, setShowHelp] = useState(false);
 
   const tvSymbol = normalizeSymbol(symbol);
 
   useEffect(() => {
     setIframeLoaded(false);
-    setShowHelp(false);
-
-    const timer = window.setTimeout(() => {
-      setShowHelp(true);
-    }, 8000);
-
-    return () => window.clearTimeout(timer);
   }, [tvSymbol]);
 
   const iframeSrc = useMemo(() => {
@@ -59,10 +51,10 @@ export function TradingViewChart({
 
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border border-white/10 bg-[#0b0f0d] ${className}`}
-      style={{ height: height === "100%" ? "100%" : height }}
+      className={`relative overflow-hidden rounded-xl border border-white/10 bg-[#0b0f0d] ${className.includes('h-') ? className : `h-[360px] md:h-[380px] xl:h-[420px] ${className}`}`}
+      style={height ? { height: height === "100%" ? "100%" : height } : undefined}
     >
-      {!iframeLoaded && !showHelp && (
+      {!iframeLoaded && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0b0f0d]">
           <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/10 border-t-primary" />
           <p className="mt-4 text-sm text-white/60">Loading TradingView chart...</p>
@@ -79,28 +71,17 @@ export function TradingViewChart({
         onLoad={() => setIframeLoaded(true)}
       />
 
-      <div className="absolute right-3 top-3 z-30">
+      <div className="absolute right-3 top-3 z-30 pointer-events-auto">
         <a
           href={openUrl}
           target="_blank"
           rel="noreferrer"
-          className="rounded-full border border-primary/30 bg-primary/15 px-4 py-2 text-xs font-semibold text-primary backdrop-blur-md transition hover:bg-primary/25 cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+          className="rounded-full border border-primary/30 bg-primary/15 px-3 py-1.5 md:px-4 md:py-2 text-[10px] md:text-xs font-semibold text-primary backdrop-blur-md transition hover:bg-primary/25 block text-center flex items-center justify-center pointer-events-auto cursor-pointer"
         >
-          Open in TradingView
+          Open in TS
         </a>
       </div>
-
-      {showHelp && (
-        <div className="absolute inset-x-4 bottom-4 z-30 rounded-xl border border-yellow-400/20 bg-[#111812]/90 p-4 text-sm shadow-xl backdrop-blur-md">
-          <p className="font-semibold text-yellow-300">
-            Chart masih loading?
-          </p>
-          <p className="mt-1 text-white/60">
-            Preview Google AI Studio atau browser kadang memblokir embed eksternal.
-            Kamu tetap bisa buka chart langsung lewat tombol di kanan atas.
-          </p>
-        </div>
-      )}
     </div>
   );
 }

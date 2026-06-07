@@ -37,6 +37,9 @@ function FormattedMoneyInput({
 export function Settings() {
   const { settings, updateSettings, resetAllData, importData, trades, transactions, reviews } = useAppStore();
   const [localSettings, setLocalSettings] = useState(settings);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const importInputRef = React.useRef<HTMLInputElement>(null);
 
   const handleSave = () => {
     updateSettings(localSettings);
@@ -72,28 +75,29 @@ export function Settings() {
     alert("CSV berhasil diexport.");
   };
 
-  const handleImport = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = e => {
-      const file = (e.target as HTMLInputElement).files?.[0];
-      if (!file) return;
-      if (!window.confirm("Import akan menimpa data yang ada. Lanjutkan?")) return;
-      
-      const reader = new FileReader();
-      reader.onload = e => {
-        const content = e.target?.result as string;
-        if (importData(content)) {
-           alert("Data berhasil diimport.");
-           window.location.reload();
-        } else {
-           alert("Invalid backup file.");
-        }
-      };
-      reader.readAsText(file);
+  const handleImportSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setShowImportModal(true);
+    }
+  };
+
+  const executeImport = () => {
+    const file = importInputRef.current?.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const content = e.target?.result as string;
+      if (importData(content)) {
+         alert("Data berhasil diimport.");
+         window.location.reload();
+      } else {
+         alert("Invalid backup file.");
+      }
     };
-    input.click();
+    reader.readAsText(file);
+    setShowImportModal(false);
+    if(importInputRef.current) importInputRef.current.value = "";
   };
 
   return (
@@ -200,7 +204,7 @@ export function Settings() {
                    <div className="w-8 h-8 rounded bg-surface border border-white/10 flex items-center justify-center font-mono text-yellow-500 font-bold">Au</div>
                    <span className="font-sans text-white font-medium">XAU/USD</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="flex flex-col">
                        <span className="font-sans text-xs text-on-surface-variant mb-1">TradingView Symbol</span>
                        <input type="text" 
@@ -240,7 +244,7 @@ export function Settings() {
                    <div className="w-8 h-8 rounded bg-surface border border-white/10 flex items-center justify-center font-mono text-orange-400 font-bold">₿</div>
                    <span className="font-sans text-white font-medium">BTC/USD</span>
                 </div>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     <div className="flex flex-col">
                        <span className="font-sans text-xs text-on-surface-variant mb-1">TradingView Symbol</span>
                        <input type="text" 
@@ -301,7 +305,7 @@ export function Settings() {
           <p className="font-sans text-xs text-on-surface-variant -mt-3">Simpan cadangan jurnal trading kamu atau export ke Excel/Google Sheets.</p>
 
           <div className="flex flex-col gap-4">
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
               <div className="flex flex-col gap-1">
                  <button onClick={handleExportJSON} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-blue-400 bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white cursor-pointer hover:shadow-lg">
                    <Download className="w-4 h-4" /> Export JSON
@@ -319,7 +323,14 @@ export function Settings() {
             <div className="w-full h-px bg-white/5 my-1" />
             
             <div className="flex flex-col gap-1">
-               <button onClick={handleImport} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-primary bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white w-full cursor-pointer hover:shadow-lg">
+               <input 
+                  type="file" 
+                  accept=".json" 
+                  ref={importInputRef} 
+                  className="hidden" 
+                  onChange={handleImportSelect} 
+               />
+               <button onClick={() => importInputRef.current?.click()} className="flex items-center justify-center gap-2 py-2 px-4 rounded-lg border border-white/10 hover:border-primary bg-white/5 hover:bg-white/10 transition-all font-sans text-sm text-white w-full cursor-pointer hover:shadow-lg">
                   <Upload className="w-4 h-4" /> Import Data
                </button>
                <span className="font-sans text-[10px] text-on-surface-variant text-center">Pulihkan data dari file backup JSON.</span>
@@ -327,12 +338,7 @@ export function Settings() {
 
             <div className="mt-auto pt-4 border-t border-error/20 flex flex-col gap-1">
                <button 
-                  onClick={() => {
-                     if(window.confirm("Hapus semua data Lootly? Akses ke data sebelumnya akan hilang secara permanen.")) {
-                         resetAllData();
-                         alert("Semua data berhasil direset.");
-                     }
-                  }}
+                  onClick={() => setShowResetModal(true)}
                   className="flex items-center justify-center gap-2 py-2 px-4 border border-error/30 bg-error/10 hover:bg-error/20 text-error rounded-lg transition-all font-display text-xs uppercase tracking-wider w-full cursor-pointer hover:shadow-lg"
                >
                  <Trash2 className="w-4 h-4" /> Reset Data
@@ -346,13 +352,80 @@ export function Settings() {
         <div className="md:col-span-12 flex justify-end mt-2">
             <button 
                onClick={handleSave}
-               className="bg-primary cursor-pointer hover:bg-primary-container text-[#00391f] font-display text-xs font-bold uppercase tracking-widest py-3 px-8 rounded-lg shadow-[0_0_15px_rgba(68,224,146,0.2)] hover:shadow-[0_0_20px_rgba(68,224,146,0.4)] transition-all transform active:scale-95 flex items-center gap-2"
+               className="bg-primary cursor-pointer hover:bg-primary-container text-[#00391f] font-display text-xs font-bold uppercase tracking-widest py-3 px-8 rounded-lg shadow-[0_0_15px_rgba(68,224,146,0.2)] hover:shadow-[0_0_20px_rgba(68,224,146,0.4)] transition-all transform active:scale-95 flex items-center gap-2 w-full md:w-auto mt-4 md:mt-0 justify-center"
             >
                <Save className="w-4 h-4" /> Simpan Pengaturan
             </button>
         </div>
 
       </div>
+
+      {/* Reset Data Modal */}
+      {showResetModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="w-full max-w-md rounded-2xl border border-error/30 bg-[#161d18] p-6 shadow-2xl relative">
+            <div className="flex justify-center mb-4 text-error">
+               <ShieldAlert className="w-12 h-12" />
+            </div>
+            <h2 className="font-display text-2xl font-bold text-center text-white mb-2">
+              Reset Semua Data?
+            </h2>
+            <p className="text-sm text-center text-on-surface-variant mb-6 leading-relaxed">
+              Tindakan ini akan <strong>menghapus secara permanen</strong> seluruh data riwayat trading, pengaturan, dan evaluasi. Kamu tidak akan bisa mengembalikannya kecuali kamu punya backup JSON.
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={() => {
+                   resetAllData();
+                   setShowResetModal(false);
+                   alert("Semua data berhasil direset.");
+                }}
+                className="w-full py-3 rounded-xl bg-error/20 border border-error/30 text-red-300 hover:bg-error/30 transition-colors font-semibold cursor-pointer"
+              >
+                Ya, Hapus Permanen
+              </button>
+              <button
+                onClick={() => setShowResetModal(false)}
+                className="w-full py-3 rounded-xl border border-white/10 text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Import Data Modal */}
+      {showImportModal && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#161d18] p-6 shadow-2xl relative">
+            <h2 className="font-display text-2xl font-bold text-white mb-2">
+              Konfirmasi Import
+            </h2>
+            <p className="text-sm text-on-surface-variant mb-6 leading-relaxed">
+              Mengimport backup JSON ini akan <strong>menimpa data aplikasi yang ada saat ini</strong>. Pastikan file JSON yang diimport sudah benar.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                   setShowImportModal(false);
+                   if(importInputRef.current) importInputRef.current.value = "";
+                }}
+                className="px-5 py-2.5 rounded-lg border border-white/10 text-white hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                onClick={executeImport}
+                className="px-5 py-2.5 rounded-lg bg-primary/20 border border-primary/30 text-primary hover:bg-primary/30 transition-colors font-semibold cursor-pointer whitespace-nowrap"
+              >
+                Ya, Import
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

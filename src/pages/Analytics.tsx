@@ -157,7 +157,7 @@ export function Analytics() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
         {/* Equity Curve */}
-        <div className="glass-panel rounded-xl p-6 lg:col-span-8 flex flex-col h-[400px]">
+        <div className="glass-panel rounded-xl p-6 lg:col-span-8 flex flex-col h-[400px] min-w-0">
           <div className="flex justify-between items-center mb-6">
             <h2 className="font-display text-lg text-white font-semibold flex items-center gap-2">Kurva Equity</h2>
             <div className="flex gap-1 bg-[#161d18] rounded-lg p-1">

@@ -237,10 +237,11 @@ export function Dashboard() {
              ))}
           </div>
 
-          <div className="glass-panel rounded-xl flex-1 relative overflow-hidden flex flex-col min-h-[300px]">
+          <div className="glass-panel rounded-xl flex-1 relative overflow-hidden flex flex-col min-w-0">
              {/* The Chart */}
              <TradingViewChart 
                 symbol={settings.instruments[selectedAsset as AssetType].tradingViewSymbol} 
+                className="w-full flex-1 min-h-[360px] md:min-h-[380px] lg:min-h-[420px]"
              />
           </div>
 
