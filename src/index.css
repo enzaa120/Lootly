@@ -1,0 +1,84 @@
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #44e092;
+  --color-primary-fixed: #66fdac;
+  --color-on-primary: #00391f;
+  --color-primary-container: #00c076;
+  --color-secondary: #adc6ff;
+  --color-on-secondary: #002e69;
+  --color-secondary-container: #4b8eff;
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-surface: #0e1510;
+  --color-on-surface: #dce5dc;
+  --color-surface-dim: #0e1510;
+  --color-surface-bright: #333b35;
+  --color-surface-container-high: #242c26;
+  --color-surface-container: #1a211c;
+  --color-surface-container-low: #161d18;
+  --color-on-surface-variant: #bbcabd;
+  --color-surface-variant: #2f3731;
+  --color-outline: #869488;
+  --color-outline-variant: #3c4a40;
+  --color-background: #0e1510;
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Geist", "Inter", sans-serif;
+  --font-mono: "Geist", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer utilities {
+  .glass-panel {
+    @apply bg-surface-container/60 backdrop-blur-xl border border-white/10 shadow-lg;
+  }
+  .glass-card {
+    background: linear-gradient(135deg, rgba(36, 44, 38, 0.4) 0%, rgba(22, 29, 24, 0.4) 100%);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .glass-input {
+    @apply bg-white/5 border border-white/10 focus:border-primary focus:ring-1 focus:ring-primary/50 transition-colors placeholder:text-on-surface-variant/50 outline-none;
+  }
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+  .fill-icon {
+    font-variation-settings: 'FILL' 1;
+  }
+  
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  /* Custom scrollbar for a cleaner look */
+  ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+      background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+      background: #2f3731;
+      border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+      background: #3c4a40;
+  }
+
+  input[type="number"]::-webkit-inner-spin-button,
+  input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type="number"] {
+    -moz-appearance: textfield;
+  }
+}

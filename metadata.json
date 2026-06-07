@@ -1,0 +1,6 @@
+{
+  "name": "Lootly",
+  "description": "Trading Journal & Risk Tracker for forex and crypto traders.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
