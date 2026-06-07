@@ -1,77 +1,108 @@
-import { useEffect, useState, memo } from 'react';
+import { useEffect, useMemo, useState } from "react";
 
-interface TradingViewChartProps {
-  symbol: string;
-  theme?: 'dark' | 'light';
-  interval?: string;
+type TradingViewChartProps = {
+  symbol?: string;
   height?: number | string;
-}
+  className?: string;
+};
 
-export const TradingViewChart = memo(function TradingViewChart({
-  symbol,
-  theme = 'dark',
-  interval = '15',
-  height = '100%',
+const normalizeSymbol = (symbol: string) => {
+  if (symbol === "XAU/USD") return "OANDA:XAUUSD";
+  if (symbol === "BTC/USD") return "BINANCE:BTCUSDT";
+  return symbol || "OANDA:XAUUSD";
+};
+
+export function TradingViewChart({
+  symbol = "OANDA:XAUUSD",
+  height = 360,
+  className = "",
 }: TradingViewChartProps) {
-  const [loadError, setLoadError] = useState(false);
   const [iframeLoaded, setIframeLoaded] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+
+  const tvSymbol = normalizeSymbol(symbol);
 
   useEffect(() => {
-    setLoadError(false);
     setIframeLoaded(false);
-    
-    // Set fallback timeout for iframe loading
-    const timeoutId = setTimeout(() => {
-       if (!iframeLoaded) {
-          setLoadError(true);
-       }
+    setShowHelp(false);
+
+    const timer = window.setTimeout(() => {
+      setShowHelp(true);
     }, 8000);
 
-    return () => clearTimeout(timeoutId);
-  }, [symbol, theme, interval, iframeLoaded]);
+    return () => window.clearTimeout(timer);
+  }, [tvSymbol]);
 
-  if (loadError) {
-    return (
-       <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center border border-white/10 bg-[#161d18] rounded-xl" style={{ height }}>
-          <p className="text-on-surface-variant mb-4 font-sans text-sm">
-            Chart belum bisa dimuat di preview ini. Buka langsung di TradingView.
-          </p>
-          <a 
-            href={`https://www.tradingview.com/chart/?symbol=${encodeURIComponent(symbol)}`}
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="px-6 py-2 bg-primary text-[#00391f] font-display text-xs font-bold uppercase tracking-widest rounded-lg hover:bg-[#32c882] transition-colors cursor-pointer"
-          >
-            Open in TradingView
-          </a>
-       </div>
-    );
-  }
+  const iframeSrc = useMemo(() => {
+    const config = {
+      autosize: true,
+      symbol: tvSymbol,
+      interval: "15",
+      timezone: "Asia/Jakarta",
+      theme: "dark",
+      style: "1",
+      locale: "en",
+      enable_publishing: false,
+      hide_top_toolbar: false,
+      hide_legend: false,
+      save_image: true,
+      calendar: false,
+      support_host: "https://www.tradingview.com",
+    };
 
-  // Use TradingView's official embed URL format
-  const iframeSrc = `https://s.tradingview.com/widgetembed/?frameElementId=tradingview_76d87&symbol=${encodeURIComponent(symbol)}&interval=${interval}&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=2b3139&studies=%5B%5D&theme=${theme.charAt(0).toUpperCase() + theme.slice(1)}&style=1&timezone=Asia%2FJakarta&studies_overrides=%7B%7D&overrides=%7B%7D&enabled_features=%5B%5D&disabled_features=%5B%5D&locale=en&utm_source=localhost&utm_medium=widget&utm_campaign=chart&utm_term=${encodeURIComponent(symbol)}`;
+    return `https://www.tradingview-widget.com/embed-widget/advanced-chart/?locale=en#${encodeURIComponent(
+      JSON.stringify(config)
+    )}`;
+  }, [tvSymbol]);
+
+  const openUrl = `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol)}`;
 
   return (
-    <div className="w-full h-full relative border border-white/5 bg-[#0e1510] rounded-xl overflow-hidden" style={{ height }}>
+    <div
+      className={`relative overflow-hidden rounded-xl border border-white/10 bg-[#0b0f0d] ${className}`}
+      style={{ height: height === "100%" ? "100%" : height }}
+    >
+      {!iframeLoaded && !showHelp && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-[#0b0f0d]">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-white/10 border-t-primary" />
+          <p className="mt-4 text-sm text-white/60">Loading TradingView chart...</p>
+        </div>
+      )}
+
       <iframe
+        key={tvSymbol}
+        title={`TradingView ${tvSymbol}`}
         src={iframeSrc}
-        title={`TradingView Chart ${symbol}`}
-        className="w-full h-full border-none"
-        allowTransparency={true}
-        scrolling="no"
-        allowFullScreen={true}
+        className="h-full w-full border-0"
+        allowFullScreen
+        loading="lazy"
         onLoad={() => setIframeLoaded(true)}
       />
-      {!iframeLoaded && (
-        <div className="absolute inset-0 flex items-center justify-center bg-[#0e1510] z-10">
-          <div className="animate-pulse flex flex-col items-center">
-            <div className="w-8 h-8 rounded-full border-2 border-primary/20 border-t-primary animate-spin mb-4" />
-            <span className="font-mono text-xs text-on-surface-variant">Memuat Chart...</span>
-          </div>
+
+      <div className="absolute right-3 top-3 z-30">
+        <a
+          href={openUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-full border border-primary/30 bg-primary/15 px-4 py-2 text-xs font-semibold text-primary backdrop-blur-md transition hover:bg-primary/25 cursor-pointer"
+        >
+          Open in TradingView
+        </a>
+      </div>
+
+      {showHelp && (
+        <div className="absolute inset-x-4 bottom-4 z-30 rounded-xl border border-yellow-400/20 bg-[#111812]/90 p-4 text-sm shadow-xl backdrop-blur-md">
+          <p className="font-semibold text-yellow-300">
+            Chart masih loading?
+          </p>
+          <p className="mt-1 text-white/60">
+            Preview Google AI Studio atau browser kadang memblokir embed eksternal.
+            Kamu tetap bisa buka chart langsung lewat tombol di kanan atas.
+          </p>
         </div>
       )}
     </div>
   );
-});
+}
 
-
+export default TradingViewChart;
