@@ -124,11 +124,11 @@ Return a STRICT JSON object with this exact structure:
   "rawNotes": string
 }`;
 
-    // Resilient model cascade: try preferred gemini-3.6-flash, fallback to gemini-3.8-flash, then gemini-flash-latest
+    // Resilient model cascade: try preferred gemini-3.8-flash, fallback to gemini-flash-latest, then gemini-3.1-flash-lite
     const CANDIDATE_MODELS = [
-      "gemini-3.6-flash",
       "gemini-3.8-flash",
-      "gemini-flash-latest"
+      "gemini-flash-latest",
+      "gemini-3.1-flash-lite",
     ];
 
     let lastError: any = null;

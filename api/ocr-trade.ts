@@ -1,60 +1,200 @@
 import { GoogleGenAI } from "@google/genai";
 
-let aiClient: GoogleGenAI | null = null;
-function getAIClient(): GoogleGenAI {
-  if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not configured.");
-    }
-    aiClient = new GoogleGenAI({ apiKey });
-  }
-  return aiClient;
+// Configure Vercel serverless function max execution time
+export const maxDuration = 60;
+
+/**
+ * Safely retrieve Gemini API key from environment variables.
+ * Checks GEMINI_API_KEY as primary, with fallbacks for common alternative variable names.
+ */
+function getSanitizedApiKey(): string {
+  const rawKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.VITE_GEMINI_API_KEY ||
+    "";
+
+  // Remove surrounding quotes and trim whitespace if present
+  return rawKey.replace(/^["']|["']$/g, "").trim();
 }
 
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: "8mb",
-    },
-  },
-};
+/**
+ * Sanitize error message to prevent leaking any sensitive tokens or internal URLs.
+ */
+function sanitizeErrorMessage(error: any): string {
+  const raw = String(error?.message || error || "Unknown error");
+  return raw
+    .replace(/AIza[a-zA-Z0-9_\-]{10,}/g, "[REDACTED_API_KEY]")
+    .replace(/key=[^&\s]+/gi, "key=[REDACTED]")
+    .slice(0, 300);
+}
+
+/**
+ * Robust request body extractor compatible with Vercel Serverless Function runtimes,
+ * Express, and raw Node HTTP IncomingMessage streams.
+ */
+async function extractRequestBody(req: any): Promise<any> {
+  try {
+    if (req.body !== undefined && req.body !== null) {
+      if (typeof req.body === "object" && !Buffer.isBuffer(req.body)) {
+        return req.body;
+      }
+      if (typeof req.body === "string") {
+        return JSON.parse(req.body);
+      }
+      if (Buffer.isBuffer(req.body)) {
+        return JSON.parse(req.body.toString("utf-8"));
+      }
+    }
+
+    // Stream fallback if req.body was not parsed by Vercel middleware
+    if (typeof req.on === "function" && !req.readableEnded) {
+      return await new Promise((resolve) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: any) => {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        });
+        req.on("end", () => {
+          try {
+            const raw = Buffer.concat(chunks).toString("utf-8");
+            resolve(raw ? JSON.parse(raw) : null);
+          } catch {
+            resolve(null);
+          }
+        });
+        req.on("error", () => resolve(null));
+      });
+    }
+  } catch (err: any) {
+    console.error("[OCR Diagnostic] extractRequestBody exception:", sanitizeErrorMessage(err));
+    return null;
+  }
+
+  return null;
+}
 
 export default async function handler(req: any, res: any) {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   res.setHeader("Content-Type", "application/json");
 
   if (req.method !== "POST") {
-    return res.status(405).json({ success: false, error: "Method not allowed. Only POST requests are supported." });
+    return res.status(405).json({
+      success: false,
+      code: "METHOD_NOT_ALLOWED",
+      error: "Method not allowed. Only POST requests are supported.",
+    });
   }
 
+  // Diagnostic Log 1: Content-Type
+  const contentType = req.headers?.["content-type"] || "unknown";
+  console.log("[OCR Diagnostic] request content-type:", contentType);
+
+  // Diagnostic Log 2: GEMINI_API_KEY existence (boolean only, never print key value)
+  const apiKey = getSanitizedApiKey();
+  const hasApiKey = Boolean(apiKey);
+  console.log("[OCR Diagnostic] GEMINI_API_KEY exists (boolean):", hasApiKey);
+
+  // Pre-Gemini Validation: API Key
+  if (!hasApiKey) {
+    console.warn("[OCR Diagnostic] Validation branch failed: MISSING_GEMINI_API_KEY");
+    return res.status(500).json({
+      success: false,
+      code: "MISSING_GEMINI_API_KEY",
+      error: "GEMINI_API_KEY is not configured on the server.",
+    });
+  }
+
+  // Parse and validate request body
+  let parsedBody: any = null;
   try {
-    if (!req.body || typeof req.body !== "object") {
-      return res.status(400).json({ success: false, error: "Invalid JSON request body." });
-    }
+    parsedBody = await extractRequestBody(req);
+  } catch (parseErr: any) {
+    const sanitized = sanitizeErrorMessage(parseErr);
+    console.error("[OCR Diagnostic] Pre-Gemini error in body extraction:", {
+      name: parseErr?.name || "ParseError",
+      message: sanitized,
+    });
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_BODY",
+      error: `Gagal membaca request body: ${sanitized}`,
+    });
+  }
 
-    const { imageBase64, mimeType = "image/png" } = req.body;
-    if (!imageBase64 || typeof imageBase64 !== "string") {
-      return res.status(400).json({ success: false, error: "Gambar tidak ditemukan (imageBase64 required)." });
-    }
+  // Diagnostic Log 3: whether req.body exists
+  const hasReqBody = Boolean(parsedBody && typeof parsedBody === "object");
+  console.log("[OCR Diagnostic] req.body exists:", hasReqBody);
 
-    // Guard against oversized payloads (Vercel maximum body size is 4.5MB)
-    if (imageBase64.length > 7 * 1024 * 1024) {
-      return res.status(413).json({
-        success: false,
-        error: "Ukuran gambar terlalu besar. Maksimum ukuran gambar adalah 5MB.",
-      });
-    }
+  if (!hasReqBody) {
+    console.warn("[OCR Diagnostic] Validation branch failed: INVALID_BODY");
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_BODY",
+      error: "Request body kosong atau bukan JSON yang valid.",
+    });
+  }
 
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z0-9-+.]+;base64,/, "");
-    if (!cleanBase64) {
-      return res.status(400).json({ success: false, error: "Format base64 gambar tidak valid." });
-    }
+  const { imageBase64, mimeType = "image/png" } = parsedBody;
 
-    const safeMimeType = typeof mimeType === "string" && mimeType.startsWith("image/") ? mimeType : "image/png";
-    const ai = getAIClient();
+  // Diagnostic Log 4: typeof imageBase64
+  console.log("[OCR Diagnostic] typeof imageBase64:", typeof imageBase64);
 
-    const prompt = `You are an expert financial trading screenshot analyzer and contextual OCR parser.
+  // Diagnostic Log 5: imageBase64 length only
+  const imageBase64Length = typeof imageBase64 === "string" ? imageBase64.length : 0;
+  console.log("[OCR Diagnostic] imageBase64 length only:", imageBase64Length);
+
+  // Diagnostic Log 6: MIME type
+  const safeMimeType = typeof mimeType === "string" && mimeType.startsWith("image/") ? mimeType : "image/png";
+  console.log("[OCR Diagnostic] MIME type:", safeMimeType);
+
+  if (!imageBase64 || typeof imageBase64 !== "string") {
+    console.warn("[OCR Diagnostic] Validation branch failed: INVALID_IMAGE (missing or not string)");
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_IMAGE",
+      error: "Gambar tidak ditemukan (imageBase64 required).",
+    });
+  }
+
+  // Guard against oversized payloads (Vercel payload hard ceiling is 4.5MB)
+  if (imageBase64Length > 5 * 1024 * 1024) {
+    console.warn("[OCR Diagnostic] Validation branch failed: PAYLOAD_TOO_LARGE (exceeds 5MB)");
+    return res.status(413).json({
+      success: false,
+      code: "PAYLOAD_TOO_LARGE",
+      error: "Ukuran gambar terlalu besar. Maksimum ukuran gambar adalah 4MB.",
+    });
+  }
+
+  const cleanBase64 = imageBase64.replace(/^data:image\/[a-z0-9-+.]+;base64,/, "");
+  if (!cleanBase64) {
+    console.warn("[OCR Diagnostic] Validation branch failed: INVALID_IMAGE (empty clean base64)");
+    return res.status(400).json({
+      success: false,
+      code: "INVALID_IMAGE",
+      error: "Format base64 gambar tidak valid.",
+    });
+  }
+
+  // Initialize GoogleGenAI SDK safely
+  let ai: GoogleGenAI;
+  try {
+    ai = new GoogleGenAI({ apiKey });
+  } catch (initErr: any) {
+    const sanitizedMsg = sanitizeErrorMessage(initErr);
+    console.error("[OCR Diagnostic] Validation branch failed: GEMINI_INIT_FAILED", {
+      name: initErr?.name || "InitError",
+      message: sanitizedMsg,
+    });
+    return res.status(500).json({
+      success: false,
+      code: "GEMINI_INIT_FAILED",
+      error: `Inisialisasi Gemini SDK gagal: ${sanitizedMsg}`,
+    });
+  }
+
+  const prompt = `You are an expert financial trading screenshot analyzer and contextual OCR parser.
 Analyze this trading screenshot carefully. It may come from TradingView, MetaTrader 4 (MT4), MetaTrader 5 (MT5), Binance, Bybit, cTrader, Exness, or a broker mobile app.
 
 CONTEXTUAL ANALYSIS RULES:
@@ -121,77 +261,93 @@ Return a STRICT JSON object with this exact structure:
   "rawNotes": string
 }`;
 
-    const CANDIDATE_MODELS = [
-      "gemini-3.6-flash",
-      "gemini-3.8-flash",
-      "gemini-flash-latest"
-    ];
+  // Valid Gemini model candidates from @google/genai SDK specification
+  const CANDIDATE_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+    "gemini-3.1-flash-lite",
+  ];
 
-    let lastError: any = null;
-    let responseText = "";
+  let lastError: any = null;
+  let responseText = "";
 
-    for (const modelName of CANDIDATE_MODELS) {
-      try {
-        const response = await ai.models.generateContent({
-          model: modelName,
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: prompt },
-                {
-                  inlineData: {
-                    mimeType: safeMimeType,
-                    data: cleanBase64,
-                  },
-                },
-              ],
-            },
-          ],
-          config: {
-            responseMimeType: "application/json",
-          },
-        });
+  console.log("[OCR Diagnostic] Gemini reached. Beginning model invocation loop...");
 
-        if (response && response.text) {
-          responseText = response.text;
-          break;
-        }
-      } catch (err: any) {
-        lastError = err;
-      }
-    }
-
-    if (!responseText) {
-      throw lastError || new Error("Semua model AI gagal memproses screenshot ini.");
-    }
-
-    let parsedData = {};
+  for (const modelName of CANDIDATE_MODELS) {
     try {
-      parsedData = JSON.parse(responseText);
-    } catch {
-      const match = responseText.match(/\{[\s\S]*\}/);
-      if (match) {
-        parsedData = JSON.parse(match[0]);
-      } else {
-        throw new Error("Could not parse JSON response from Gemini");
+      console.log(`[OCR Diagnostic] Invoking model: ${modelName}`);
+      const response = await ai.models.generateContent({
+        model: modelName,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: safeMimeType,
+                  data: cleanBase64,
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: "application/json",
+        },
+      });
+
+      if (response && response.text) {
+        responseText = response.text;
+        console.log(`[OCR Diagnostic] Model ${modelName} succeeded.`);
+        break;
       }
+    } catch (err: any) {
+      const sanitized = sanitizeErrorMessage(err);
+      console.warn(`[OCR Diagnostic] Model ${modelName} error: ${sanitized}. Trying next candidate...`);
+      lastError = err;
     }
+  }
 
-    return res.status(200).json({
-      success: true,
-      data: parsedData,
-    });
-  } catch (error: any) {
-    // Sanitize error message to prevent secret or raw URL exposure
-    const rawMsg = String(error?.message || "");
-    const safeErrorMsg = rawMsg.includes("API_KEY") || rawMsg.includes("key=")
-      ? "Gagal menghubungi layanan OCR AI. Silakan periksa konfigurasi API."
-      : rawMsg || "Gagal memproses screenshot OCR.";
-
-    return res.status(500).json({
+  if (!responseText) {
+    const sanitizedError = sanitizeErrorMessage(lastError);
+    console.error("[OCR Diagnostic] All Gemini candidate models failed:", sanitizedError);
+    return res.status(502).json({
       success: false,
-      error: safeErrorMsg,
+      code: "GEMINI_REQUEST_FAILED",
+      error: `Gagal memproses gambar dengan model AI: ${sanitizedError}`,
     });
   }
+
+  let parsedData = {};
+  try {
+    parsedData = JSON.parse(responseText);
+  } catch {
+    const match = responseText.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        parsedData = JSON.parse(match[0]);
+      } catch (nestedErr: any) {
+        console.error("[OCR Diagnostic] Response parsing failed: RESPONSE_PARSE_FAILED");
+        return res.status(502).json({
+          success: false,
+          code: "RESPONSE_PARSE_FAILED",
+          error: "Gagal membaca struktur JSON yang dihasilkan oleh AI.",
+        });
+      }
+    } else {
+      console.error("[OCR Diagnostic] Response parsing failed: RESPONSE_PARSE_FAILED (no JSON block found)");
+      return res.status(502).json({
+        success: false,
+        code: "RESPONSE_PARSE_FAILED",
+        error: "Respons AI tidak mengandung format JSON yang dapat dibaca.",
+      });
+    }
+  }
+
+  return res.status(200).json({
+    success: true,
+    data: parsedData,
+  });
 }
+
