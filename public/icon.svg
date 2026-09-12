@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <rect width="512" height="512" rx="128" fill="#09090b"/>
+  <rect x="8" y="8" width="496" height="496" rx="120" stroke="#27272a" stroke-width="8"/>
+  
+  <!-- Candlestick upper and lower wick for the 'L' stem -->
+  <line x1="168" y1="88" x2="168" y2="132" stroke="#10b981" stroke-width="28" stroke-linecap="round"/>
+  <line x1="168" y1="324" x2="168" y2="372" stroke="#10b981" stroke-width="28" stroke-linecap="round"/>
+  
+  <!-- Letter L vertical candlestick body in pure crisp white -->
+  <rect x="144" y="132" width="48" height="192" rx="16" fill="#ffffff"/>
+  
+  <!-- Letter L horizontal base connecting to an upward growth tick in emerald -->
+  <path d="M192 300H312C330 300 344 286 344 268V192" stroke="#10b981" stroke-width="36" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="344" cy="168" r="24" fill="#34d399"/>
+</svg>

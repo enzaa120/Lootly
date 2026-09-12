@@ -5,26 +5,84 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function formatCurrency(amount: number, currency: 'USD' | 'IDR' = 'USD'): string {
+export function formatCurrency(amount: number, currency: 'USD' | 'IDR' = 'IDR'): string {
   if (currency === 'IDR') {
-    const formatted = new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
-    }).format(amount);
-    return formatted.replace(/^Rp\s*/, 'Rp');
+    return formatIDR(amount);
   }
-  
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
   }).format(amount);
 }
 
+/**
+ * Format number to Indonesian Rupiah (IDR)
+ * Rules:
+ * - always use "Rp"
+ * - always use dot "." as thousand separator
+ * - never use commas
+ * - never show decimals unless truly necessary
+ * - Examples: Rp 0, Rp 1.000, Rp 100.000, +Rp 250.000, -Rp 120.000
+ */
+export function formatIDR(amount: number, showSign: boolean = false): string {
+  if (isNaN(amount) || amount === null || amount === undefined) return "Rp 0";
+  const isNegative = amount < 0;
+  const absValue = Math.round(Math.abs(amount));
+  
+  // Format with dot separator
+  const formattedAbs = absValue.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  
+  if (isNegative) {
+    return `-Rp ${formattedAbs}`;
+  }
+  if (showSign && amount > 0) {
+    return `+Rp ${formattedAbs}`;
+  }
+  return `Rp ${formattedAbs}`;
+}
+
+export function formatPercent(percent: number, showSign: boolean = true): string {
+  if (isNaN(percent) || percent === null || percent === undefined) return "0%";
+  const formatted = Math.abs(percent).toFixed(1).replace(/\.0$/, "");
+  if (percent > 0) {
+    return showSign ? `+${formatted}%` : `${formatted}%`;
+  }
+  if (percent < 0) {
+    return `-${formatted}%`;
+  }
+  return "0%";
+}
+
+/**
+ * Format profit showing both nominal IDR and percentage
+ * Examples: +Rp 250.000 (+2.5%), -Rp 120.000 (-1.1%)
+ */
+export function formatProfitDual(pnlIdr: number, pnlPercent?: number): string {
+  const nominal = formatIDR(pnlIdr, true);
+  if (pnlPercent !== undefined && !isNaN(pnlPercent)) {
+    const pct = formatPercent(pnlPercent, true);
+    return `${nominal} (${pct})`;
+  }
+  return nominal;
+}
+
+export function formatNumberWithDots(val: number | string): string {
+  if (val === "" || val === null || val === undefined) return "";
+  const cleaned = val.toString().replace(/[^0-9]/g, "");
+  if (!cleaned) return "";
+  return cleaned.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+
+export function parseNumberWithDots(val: string): number {
+  if (!val) return 0;
+  const cleaned = val.replace(/[^0-9-]/g, "");
+  const num = parseInt(cleaned, 10);
+  return isNaN(num) ? 0 : num;
+}
+
 export const generateId = () => crypto.randomUUID();
 
-export function calculateDisciplineScore(trade: any, maxDailyLossPercent: number = 0): number {
+export function calculateDisciplineScore(trade: any, maxDailyLoss: number = 0): number {
   let score = 10;
   
   if (trade.actualSL === undefined || isNaN(trade.actualSL)) score -= 3;
@@ -38,7 +96,13 @@ export function calculateDisciplineScore(trade: any, maxDailyLossPercent: number
     if (trade.checklist.riskAcceptable === false) score -= 2;
   }
   
-  if (trade.riskPercent > maxDailyLossPercent && maxDailyLossPercent > 0) score -= 2;
+  if (maxDailyLoss > 0) {
+    if (maxDailyLoss > 100) {
+      if ((trade.riskIdr || 0) > maxDailyLoss) score -= 2;
+    } else {
+      if ((trade.riskPercent || 0) > maxDailyLoss) score -= 2;
+    }
+  }
   if (trade.followedPlan === false) score -= 2;
   if (trade.slFollowed === false) score -= 1;
   if (trade.tpRealistic === false) score -= 1;

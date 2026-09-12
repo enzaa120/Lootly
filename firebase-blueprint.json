@@ -1,0 +1,61 @@
+{
+  "$schema": "https://firebase.google.com/schemas/firestore-blueprint.json",
+  "collections": {
+    "users": {
+      "description": "User profiles and root documents",
+      "fields": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "accountMode": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "subcollections": {
+        "trades": {
+          "description": "User journaled trades",
+          "fields": {
+            "id": { "type": "string" },
+            "accountMode": { "type": "string" },
+            "marketType": { "type": "string" },
+            "status": { "type": "string" },
+            "date": { "type": "string" },
+            "time": { "type": "string" },
+            "asset": { "type": "string" },
+            "direction": { "type": "string" },
+            "lot": { "type": "number" },
+            "pnlIdr": { "type": "number" },
+            "pnlPercent": { "type": "number" },
+            "setupType": { "type": "string" },
+            "entryReason": { "type": "string" },
+            "session": { "type": "string" },
+            "marketCondition": { "type": "string" },
+            "emotionBefore": { "type": "string" },
+            "confidenceLevel": { "type": "string" },
+            "disciplineStatus": { "type": "string" },
+            "mistakes": { "type": "array" },
+            "lessonLearned": { "type": "string" },
+            "screenshotProof": { "type": "string" },
+            "createdAt": { "type": "string" },
+            "updatedAt": { "type": "string" }
+          }
+        },
+        "settings": {
+          "description": "User trading settings and account parameters",
+          "fields": {
+            "startingBalanceDemo": { "type": "number" },
+            "startingBalanceReal": { "type": "number" },
+            "targetBalanceDemo": { "type": "number" },
+            "targetBalanceReal": { "type": "number" },
+            "dailyProfitTargetDemoIdr": { "type": "number" },
+            "dailyProfitTargetDemoPercent": { "type": "number" },
+            "dailyProfitTargetRealIdr": { "type": "number" },
+            "dailyProfitTargetRealPercent": { "type": "number" },
+            "maxDailyLossPercent": { "type": "number" },
+            "stopAfterLosses": { "type": "number" }
+          }
+        }
+      }
+    }
+  }
+}

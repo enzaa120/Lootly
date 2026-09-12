@@ -3,11 +3,21 @@ export interface TradeSettings {
   startingBalanceReal: number;
   targetBalanceDemo: number;
   targetBalanceReal: number;
-  maxDailyLossPercent: number;
+  
+  // Trading Plan Harian
+  dailyProfitTargetDemoIdr: number;
+  dailyProfitTargetDemoPercent: number;
+  dailyProfitTargetRealIdr: number;
+  dailyProfitTargetRealPercent: number;
+
+  // Manajemen Batas Kerugian Harian (IDR) & Disiplin
+  maxDailyLossIdrDemo: number;
+  maxDailyLossIdrReal: number;
+  maxDailyLossPercent?: number;
   maxTradesPerDay: number;
   stopAfterLosses: number;
-  usdToIdr: number;
-  instruments: {
+  usdToIdr?: number;
+  instruments?: {
     "XAU/USD": InstrumentConfig;
     "BTC/USD": InstrumentConfig;
   };
@@ -20,47 +30,31 @@ export interface InstrumentConfig {
 }
 
 export type AccountMode = "demo" | "real";
-export type TradeStatus = "planned" | "closed";
+export type MarketType = "forex" | "crypto";
+export type TradeStatus = "open" | "closed" | "planned";
 export type TradeResult = "win" | "loss" | "breakeven" | "open";
-export type AssetType = "XAU/USD" | "BTC/USD";
+export type AssetType = "XAU/USD" | "BTC/USD" | "EUR/USD" | "GBP/USD" | "USD/JPY" | "ETH/USD" | "SOL/USD" | string;
 export type TradeDirection = "buy" | "sell";
 export type EmotionType = "Calm" | "Confident" | "Doubtful" | "FOMO" | "Revenge" | "Greedy" | "Afraid" | "Tired" | "Forced Entry" | "Satisfied" | "Regret" | "Angry" | "Relieved" | "Disappointed";
 export type MistakeType = "FOMO" | "Revenge Trade" | "Early Entry" | "Late Entry" | "Oversized Lot" | "No SL" | "SL Too Tight" | "Against Trend" | "News Spike" | "Overtrade" | "Chasing Candle" | "Closed Too Early" | "Held Too Long";
 
-export interface NewsEvent {
-  id: string;
-  date: string; // YYYY-MM-DD
-  time: string; // HH:MM
-  currency: "USD" | "EUR" | "GBP" | "JPY" | "AUD" | "CAD" | "CHF" | "CNY" | "Other";
-  impact: "Low" | "Medium" | "High";
-  eventName: string;
-  forecast?: string;
-  previous?: string;
-  actual?: string;
-  notes?: string;
-  relevantAsset: "XAU/USD" | "BTC/USD" | "Both";
-  tradingRule: string;
-  isDone?: boolean;
-}
-
 export interface Trade {
   id: string;
+  userId?: string;
   accountMode: AccountMode;
+  marketType: MarketType;
   status: TradeStatus;
-  date: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:mm
   asset: AssetType;
-  tradingViewSymbol: string;
+  tradingViewSymbol?: string;
   direction: TradeDirection;
-  timeframe: string;
-  session: string;
-  bias: string;
-  setupType: string;
-  entryReason: string;
-  entryPlan: number;
+  timeframe?: string;
+  
+  // Execution & Pricing
+  entryPlan?: number;
   slPlan?: number;
   tp1Plan?: number;
-  tp2Plan?: number;
-  tp3Plan?: number;
   actualEntry?: number;
   actualExit?: number;
   actualSL?: number;
@@ -69,41 +63,71 @@ export interface Trade {
   riskPercent: number;
   riskIdr: number;
   pnlIdr: number;
-  pnlPoints: number;
-  pnlPips: number;
+  pnlPercent: number;
+  pnlPoints?: number;
+  pnlPips?: number;
   rrPlanned: number;
   rrRealized: number;
   result: TradeResult;
-  duration?: string; // in minutes/hours
-  emotionBefore?: EmotionType;
-  emotionAfter?: EmotionType;
+
+  // Unified Section: "Setup, Psikologi & Bukti Chart"
+  // A. Setup
+  setupType: string; // strategy / setup tag
+  entryReason: string; // trade rationale
+  session?: string; // Asia, London, New York, Overlap, 24/7
+  marketCondition?: string; // Trending, Ranging, Breakout, Reversal, Volatile
+
+  // B. Psychology
+  emotionBefore?: EmotionType | string;
+  emotionAfter?: EmotionType | string;
   mentalStateNotes?: string;
-  checklist: {
-    m30Checked: boolean;
-    m15Checked: boolean;
-    nearSnr: boolean;
-    nearVwap: boolean;
-    emaSupports: boolean;
-    atrAcceptable: boolean;
-    slClear: boolean;
-    riskAcceptable: boolean;
-    notRevenge: boolean;
-    notChasingCandle: boolean;
-  };
+  confidenceLevel?: "Low" | "Medium" | "High";
+  disciplineStatus?: "Disciplined" | "Minor Slip" | "Violated Rules";
   mistakes: MistakeType[];
-  disciplineScore?: number;
-  followedPlan?: boolean;
-  slFollowed?: boolean;
-  tpRealistic?: boolean;
   lessonLearned?: string;
+
+  // C. Chart Proof & OCR
+  screenshotProof?: string; // Cloud Storage URL or data URL
+  screenshotProofNotes?: string;
   screenshotBefore?: string;
   screenshotAfter?: string;
+  
+  // OCR metadata if prefilled from screenshot
+  ocrDetected?: boolean;
+  ocrExtractedData?: {
+    sourcePlatform?: string;
+    confidence?: "high" | "medium" | "low";
+    detectedSymbol?: string;
+    detectedDirection?: string;
+    detectedEntry?: number;
+    detectedSL?: number;
+    detectedTP?: number;
+    detectedExit?: number;
+    detectedLot?: number;
+    rawNotes?: string;
+  };
+
+  // Safe schema aliases for cross-compatibility
+  pair?: string;
+  accountType?: AccountMode | string;
+  entry?: number;
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  exitPrice?: number | null;
+  lotSize?: number;
+  notes?: string;
+  setup?: string;
+  psychology?: any;
+  screenshotUrl?: string | null;
+  storagePath?: string | null;
+
   createdAt: string;
   updatedAt: string;
 }
 
 export interface Transaction {
   id: string;
+  userId?: string;
   accountMode: AccountMode;
   type: "deposit" | "withdrawal" | "trade_pnl" | "adjustment";
   amount: number;
@@ -112,22 +136,10 @@ export interface Transaction {
   relatedTradeId?: string;
 }
 
-export interface Review {
-  id: string;
-  accountMode: AccountMode;
-  period: "daily" | "weekly" | "monthly" | "yearly";
-  date: string;
-  totalTrades: number;
-  totalPnl: number;
-  winrate: number;
-  avgRr: number;
-  bestTradeId?: string;
-  worstTradeId?: string;
-  biggestMistake?: MistakeType;
-  bestSetup?: string;
-  worstSetup?: string;
-  avgDisciplineScore: number;
-  notes: string;
-  lessonsLearned: string;
-  rulesForNext: string;
+export interface UserProfile {
+  uid: string;
+  email: string | null;
+  displayName: string | null;
+  photoURL: string | null;
+  isAnonymous: boolean;
 }

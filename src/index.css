@@ -1,28 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  --color-primary: #44e092;
-  --color-primary-fixed: #66fdac;
-  --color-on-primary: #00391f;
-  --color-primary-container: #00c076;
-  --color-secondary: #adc6ff;
-  --color-on-secondary: #002e69;
-  --color-secondary-container: #4b8eff;
-  --color-error: #ffb4ab;
-  --color-on-error: #690005;
-  --color-error-container: #93000a;
-  --color-surface: #0e1510;
-  --color-on-surface: #dce5dc;
-  --color-surface-dim: #0e1510;
-  --color-surface-bright: #333b35;
-  --color-surface-container-high: #242c26;
-  --color-surface-container: #1a211c;
-  --color-surface-container-low: #161d18;
-  --color-on-surface-variant: #bbcabd;
-  --color-surface-variant: #2f3731;
-  --color-outline: #869488;
-  --color-outline-variant: #3c4a40;
-  --color-background: #0e1510;
+  --color-primary: #16a34a;
+  --color-primary-hover: #15803d;
+  --color-primary-light: #f0fdf4;
+  --color-loss: #dc2626;
+  --color-loss-light: #fef2f2;
+  --color-neutral-subtle: #f4f4f5;
+  --color-border-subtle: #e4e4e7;
+  --color-surface: #ffffff;
+  --color-background: #f8f9fa;
+  --color-text-main: #09090b;
+  --color-text-muted: #71717a;
 
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Geist", "Inter", sans-serif;
@@ -30,23 +19,36 @@
 }
 
 @layer utilities {
-  .glass-panel {
-    @apply bg-surface-container/60 backdrop-blur-xl border border-white/10 shadow-lg;
+  .clean-card {
+    @apply bg-white border border-zinc-200/80 rounded-2xl shadow-[0_1px_3px_0_rgba(0,0,0,0.02),0_1px_2px_-1px_rgba(0,0,0,0.02)];
   }
-  .glass-card {
-    background: linear-gradient(135deg, rgba(36, 44, 38, 0.4) 0%, rgba(22, 29, 24, 0.4) 100%);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+
+  .clean-card-hover {
+    @apply transition-all duration-200 hover:border-zinc-300 hover:shadow-[0_4px_12px_rgba(0,0,0,0.05)];
   }
-  .glass-input {
-    @apply bg-white/5 border border-white/10 focus:border-primary focus:ring-1 focus:ring-primary/50 transition-colors placeholder:text-on-surface-variant/50 outline-none;
+
+  .clean-input {
+    @apply bg-white border border-zinc-200 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-100 transition-all rounded-xl placeholder:text-zinc-400 outline-none text-zinc-900;
   }
-  .material-symbols-outlined {
-    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+
+  .clean-button-primary {
+    @apply bg-zinc-900 text-white hover:bg-zinc-800 active:scale-[0.98] transition-all font-medium rounded-xl shadow-sm cursor-pointer;
   }
-  .fill-icon {
-    font-variation-settings: 'FILL' 1;
+
+  .clean-button-secondary {
+    @apply bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900 active:scale-[0.98] transition-all font-medium rounded-xl shadow-xs cursor-pointer;
+  }
+
+  .clean-badge-green {
+    @apply bg-emerald-50 text-emerald-700 border border-emerald-200/70 font-semibold rounded-md;
+  }
+
+  .clean-badge-red {
+    @apply bg-rose-50 text-rose-700 border border-rose-200/70 font-semibold rounded-md;
+  }
+
+  .clean-badge-gray {
+    @apply bg-zinc-100 text-zinc-600 border border-zinc-200 font-medium rounded-md;
   }
   
   .hide-scrollbar::-webkit-scrollbar {
@@ -57,20 +59,20 @@
     scrollbar-width: none;
   }
 
-  /* Custom scrollbar for a cleaner look */
+  /* Custom subtle scrollbar */
   ::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
-      background: transparent;
+    background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-      background: #2f3731;
-      border-radius: 4px;
+    background: #e4e4e7;
+    border-radius: 9999px;
   }
   ::-webkit-scrollbar-thumb:hover {
-      background: #3c4a40;
+    background: #d4d4d8;
   }
 
   input[type="number"]::-webkit-inner-spin-button,

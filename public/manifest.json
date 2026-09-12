@@ -1,0 +1,22 @@
+{
+  "name": "Lootly - Trading Journal & Risk Management",
+  "short_name": "Lootly",
+  "description": "Trading journal and risk management application for forex and crypto traders.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "32x32",
+      "type": "image/svg+xml"
+    }
+  ]
+}
