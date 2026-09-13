@@ -3,6 +3,8 @@ import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { processTradingViewWebhook } from "./src/lib/tradingviewWebhook";
+import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./src/lib/twelveData";
 
 dotenv.config();
 
@@ -29,6 +31,52 @@ function getAIClient(): GoogleGenAI {
 // API Health
 app.get("/api/health", (_req, res) => {
   res.json({ status: "ok", app: "Lootly Cloud API" });
+});
+
+// Market Data Endpoint for AI Trading Desk (Twelve Data Integration with Caching & Firestore Sync)
+app.get("/api/market-data/xauusd", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const force = req.query?.force === "true" || req.query?.refresh === "true";
+    const result = await getXauusdMarketData({ force });
+    const statusCode = result.success ? 200 : result.status === "missing_api_key" ? 200 : 502;
+    return res.status(statusCode).json(result);
+  } catch (err: any) {
+    console.error("[Market Data API Express] Unhandled error:", err);
+    return res.status(500).json({
+      success: false,
+      source: "none",
+      status: "error",
+      error: err?.message || "Internal server error fetching market data.",
+    });
+  }
+});
+
+// Market Data Diagnostic / Status Endpoint
+app.get("/api/market-data/status", async (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const diag = await getTwelveDataDiagnosticStatus();
+    return res.json({ success: true, diagnostic: diag });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// TradingView Webhook Endpoint for AI Trading Desk
+app.post("/api/tradingview-webhook", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const headerSecret = (req.headers["x-webhook-secret"] || req.headers["x-tradingview-secret"]) as string | undefined;
+    const result = await processTradingViewWebhook(req.body, headerSecret);
+    return res.status(result.statusCode).json(result.response);
+  } catch (err: any) {
+    console.error("[TradingView Webhook Express] Unhandled error:", err);
+    return res.status(500).json({
+      success: false,
+      error: "Internal server error processing TradingView webhook.",
+    });
+  }
 });
 
 // OCR Endpoint for Trading Screenshot

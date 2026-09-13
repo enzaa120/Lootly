@@ -56,6 +56,90 @@
           }
         }
       }
+    },
+    "marketData": {
+      "description": "Live multi-timeframe market context and snapshot data for AI Trading Desk",
+      "fields": {
+        "symbol": { "type": "string" },
+        "lastUpdated": { "type": "string" },
+        "activeSession": { "type": "string" }
+      },
+      "subcollections": {
+        "timeframes": {
+          "description": "Latest candle snapshots for H1, M15, M5",
+          "fields": {
+            "symbol": { "type": "string" },
+            "timeframe": { "type": "string" },
+            "open": { "type": "number" },
+            "high": { "type": "number" },
+            "low": { "type": "number" },
+            "close": { "type": "number" },
+            "volume": { "type": "number" },
+            "timestamp": { "type": "number" },
+            "session": { "type": "string" },
+            "receivedAt": { "type": "string" }
+          }
+        },
+        "candles": {
+          "description": "Rolling candle history by timeframe",
+          "fields": {
+            "timeframe": { "type": "string" }
+          },
+          "subcollections": {
+            "items": {
+              "description": "Individual historical candle records",
+              "fields": {
+                "symbol": { "type": "string" },
+                "timeframe": { "type": "string" },
+                "open": { "type": "number" },
+                "high": { "type": "number" },
+                "low": { "type": "number" },
+                "close": { "type": "number" },
+                "volume": { "type": "number" },
+                "timestamp": { "type": "number" },
+                "session": { "type": "string" },
+                "receivedAt": { "type": "string" }
+              }
+            }
+          }
+        },
+        "providerStatus": {
+          "description": "Provider synchronization metadata and upstream fetch timestamps",
+          "fields": {
+            "source": { "type": "string" },
+            "lastFetchM5": { "type": "number" },
+            "lastFetchM15": { "type": "number" },
+            "lastFetchH1": { "type": "number" },
+            "lastSuccessfulSync": { "type": "number" },
+            "lastError": { "type": "string" },
+            "updatedAt": { "type": "number" }
+          }
+        },
+        "providerUsage": {
+          "description": "Daily upstream provider request accounting to enforce quota guard",
+          "fields": {
+            "requestsM5": { "type": "number" },
+            "requestsM15": { "type": "number" },
+            "requestsH1": { "type": "number" },
+            "totalRequests": { "type": "number" },
+            "updatedAt": { "type": "number" }
+          }
+        }
+      }
+    },
+    "aiDeskAnalyses": {
+      "description": "Institutional evaluation records and setup analysis snapshots from Meja Trading AI",
+      "fields": {
+        "symbol": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "session": { "type": "string" },
+        "decision": { "type": "string" },
+        "decisionLabelIndo": { "type": "string" },
+        "confidenceLabel": { "type": "string" },
+        "ruleVersion": { "type": "string" },
+        "invalidation": { "type": "string" },
+        "createdAt": { "type": "string" }
+      }
     }
   }
 }

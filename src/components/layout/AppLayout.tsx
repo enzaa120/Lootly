@@ -12,7 +12,8 @@ import {
   LogIn,
   X,
   User as UserIcon,
-  ShieldCheck
+  ShieldCheck,
+  Cpu
 } from "lucide-react";
 import { useAppStore } from "../../store/AppContext";
 import { useState, useEffect } from "react";
@@ -39,6 +40,7 @@ export function AppLayout() {
     { name: "Beranda", path: "/", icon: LayoutDashboard },
     { name: "Journal", path: "/journal", icon: BookOpen },
     { name: "Tambah Trade", path: "/add", icon: PlusCircle, highlight: true },
+    { name: "Meja Trading AI", path: "/ai-desk", icon: Cpu },
     { name: "Analitik", path: "/analytics", icon: BarChart2 },
     { name: "Pengaturan", path: "/settings", icon: Settings },
   ];
@@ -47,6 +49,7 @@ export function AppLayout() {
     { name: "Beranda", path: "/", icon: LayoutDashboard },
     { name: "Journal", path: "/journal", icon: BookOpen },
     { name: "Tambah", path: "/add", icon: PlusCircle, highlight: true },
+    { name: "Meja AI", path: "/ai-desk", icon: Cpu },
     { name: "Analitik", path: "/analytics", icon: BarChart2 },
     { name: "Pengaturan", path: "/settings", icon: Settings },
   ];
@@ -383,7 +386,7 @@ export function AppLayout() {
             to={item.path}
             className={({ isActive }) =>
               cn(
-                "flex flex-col items-center justify-center transition-all active:scale-95 duration-150 p-1.5 cursor-pointer w-[20%]",
+                "flex flex-col items-center justify-center transition-all active:scale-95 duration-150 p-1 cursor-pointer flex-1 min-w-0 max-w-[72px]",
                 isActive ? "text-zinc-900 font-semibold" : "text-zinc-400 hover:text-zinc-700",
                 item.highlight && "bg-zinc-900 text-white rounded-xl py-2 shadow-md -mt-5 border border-zinc-800 text-center"
               )

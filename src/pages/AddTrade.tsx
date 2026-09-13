@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useAppStore } from "../store/AppContext";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams, useLocation } from "react-router-dom";
 import { 
   AssetType, 
   TradeDirection, 
@@ -48,6 +48,7 @@ export function AddTrade() {
   const { accountMode, settings, trades, updateTrade, addTrade, user } = useAppStore();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const location = useLocation();
   const editId = searchParams.get("edit");
   const initialMode = searchParams.get("mode");
 
@@ -56,6 +57,9 @@ export function AddTrade() {
     initialMode === "screenshot" ? "screenshot" : "manual"
   );
   const isSubmittingRef = useRef<boolean>(false);
+
+  // Linkage to AI Trading Desk Analysis (Phase 2 decision support linkage)
+  const [setupAnalysisId, setSetupAnalysisId] = useState<string | undefined>(undefined);
 
   // Core Form States
   const [selectedAccount, setSelectedAccount] = useState<"demo" | "real">(accountMode);
@@ -184,9 +188,23 @@ export function AddTrade() {
         if (existing.riskIdr !== undefined) {
           setCustomRiskIdr(formatNumberWithDots(existing.riskIdr));
         }
+        if (existing.setupAnalysisId) {
+          setSetupAnalysisId(existing.setupAnalysisId);
+        }
       }
+    } else if (location.state && (location.state as any).prefillPlan) {
+      // Prefill from AI Trading Desk Institutional Setup Plan
+      const plan = (location.state as any).prefillPlan;
+      if (plan.asset) setAsset(plan.asset);
+      if (plan.direction) setDirection(plan.direction);
+      if (plan.entryPrice) setEntryPrice(String(plan.entryPrice));
+      if (plan.stopLoss) setStopLoss(String(plan.stopLoss));
+      if (plan.takeProfit) setTakeProfit(String(plan.takeProfit));
+      if (plan.tradeReason) setTradeReason(plan.tradeReason);
+      if (plan.setupTag) setSetupTag(plan.setupTag);
+      if (plan.setupAnalysisId) setSetupAnalysisId(plan.setupAnalysisId);
     }
-  }, [editId, trades]);
+  }, [editId, trades, location.state]);
 
   // Auto Calculations (Entry, SL, TP, Exit, Lot)
   const calculations = useMemo(() => {
@@ -485,6 +503,9 @@ export function AddTrade() {
           sourcePlatform: ocrResultMeta.platform,
           rawNotes: ocrResultMeta.rawNotes,
         } : undefined,
+
+        // Linkage to AI Trading Desk Analysis (Phase 2 decision support linkage)
+        setupAnalysisId: setupAnalysisId || undefined,
       };
 
       // 1. Persist core trade to Firestore & local state immediately
