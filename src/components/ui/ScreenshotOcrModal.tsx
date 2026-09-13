@@ -215,10 +215,13 @@ export function ScreenshotOcrModal({ isOpen, onClose, onSaved }: ScreenshotOcrMo
 
         setStep("review");
       } catch (err: any) {
-        console.warn("OCR Error in modal:", err);
+        const errMsg = err?.message || String(err);
+        console.error("[OCR Client] OCR request failed:", errMsg);
         setOcrMeta({
           confidence: "low",
-          rawNotes: "Data angka belum terbaca otomatis. Gambar tetap disimpan sebagai bukti chart; silakan lengkapi manual.",
+          rawNotes: errMsg.includes("Koneksi") || errMsg.includes("Server OCR") || errMsg.includes("413")
+            ? `Gagal membaca screenshot (${errMsg}). Silakan lengkapi form manual.`
+            : "Data angka belum terbaca otomatis. Gambar tetap disimpan sebagai bukti chart; silakan lengkapi manual.",
         });
         setStep("review");
       } finally {

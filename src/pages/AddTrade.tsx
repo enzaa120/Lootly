@@ -306,13 +306,13 @@ export function AddTrade() {
   const isConsecutiveLossExceeded = consecutiveLossCount >= (settings.stopAfterLosses || 2);
 
   // OCR Processing Function
-  const processImageOcr = async (base64Data: string) => {
+  const processImageOcr = async (base64Data: string, mimeType = "image/png") => {
     setIsOcrScanning(true);
     setOcrResultMeta(null);
     setErrorMessage(null);
 
     try {
-      const d = await analyzeScreenshot(base64Data, "image/png");
+      const d = await analyzeScreenshot(base64Data, mimeType);
       const detected: string[] = [];
 
       // Auto-fill draft fields from OCR
@@ -365,10 +365,13 @@ export function AddTrade() {
       });
 
     } catch (err: any) {
-      console.warn("OCR Error:", err);
+      const errMsg = err?.message || String(err);
+      console.error("[OCR Client] OCR request failed:", errMsg);
       setOcrResultMeta({
         success: false,
-        rawNotes: "Data trade belum terbaca otomatis dari gambar ini. Gambar tetap disimpan sebagai bukti chart; silakan lengkapi form manual.",
+        rawNotes: errMsg.includes("Koneksi") || errMsg.includes("Server OCR") || errMsg.includes("413")
+          ? `Gagal membaca screenshot (${errMsg}). Gambar tetap disimpan sebagai bukti; silakan lengkapi form manual.`
+          : "Data trade belum terbaca otomatis dari gambar ini. Gambar tetap disimpan sebagai bukti chart; silakan lengkapi form manual.",
       });
     } finally {
       setIsOcrScanning(false);
@@ -382,12 +385,16 @@ export function AddTrade() {
       return;
     }
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       const base64 = e.target?.result as string;
       if (base64) {
         setScreenshotBase64(base64);
-        processImageOcr(base64);
+        await processImageOcr(base64, file.type);
       }
+    };
+    reader.onerror = () => {
+      console.error("[OCR Client] OCR request failed: FileReader unable to read file");
+      setErrorMessage("Gagal membaca file gambar.");
     };
     reader.readAsDataURL(file);
   };
@@ -669,6 +676,7 @@ export function AddTrade() {
                 if (e.target.files && e.target.files[0]) {
                   handleImageFile(e.target.files[0]);
                 }
+                e.target.value = "";
               }}
             />
             <button
