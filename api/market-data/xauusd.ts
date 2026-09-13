@@ -1,4 +1,4 @@
-import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "../../src/lib/twelveData";
+import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "../_lib/twelveData";
 
 export const maxDuration = 30;
 

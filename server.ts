@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { processTradingViewWebhook } from "./src/lib/tradingviewWebhook";
-import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./src/lib/twelveData";
+import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./api/_lib/twelveData";
 
 dotenv.config();
 
