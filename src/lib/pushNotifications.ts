@@ -1,6 +1,8 @@
 /**
  * Web Push Notification & In-Browser Alert Service for Lootly Meja Trading AI
  */
+import { auth, db } from "./firebase";
+import { doc, setDoc, deleteDoc } from "firebase/firestore";
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -75,7 +77,14 @@ export async function subscribeToWebPush(userId?: string): Promise<{
     // 2. Fetch server public VAPID key
     const keyRes = await fetch("/api/push/public-key");
     if (!keyRes.ok) {
-      throw new Error(`Gagal mengambil kunci publik VAPID: status ${keyRes.status}`);
+      let extra = `status ${keyRes.status}`;
+      try {
+        const errJson = await keyRes.json();
+        if (errJson.code === "VAPID_PUBLIC_KEY_MISSING") {
+          extra = "VAPID_PUBLIC_KEY belum dikonfigurasi di server environment.";
+        }
+      } catch {}
+      throw new Error(`Gagal mengambil kunci publik VAPID: ${extra}`);
     }
     const keyData = await keyRes.json();
     if (!keyData.publicKey) {
@@ -101,18 +110,40 @@ export async function subscribeToWebPush(userId?: string): Promise<{
 
     // 5. Save to server backend
     const subJson = sub.toJSON();
+    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : null);
     const saveRes = await fetch("/api/push/subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subscription: subJson,
-        userId: userId || "guest_trader",
+        userId: effectiveUid || userId || "guest_trader",
         deviceLabel: `${navigator.platform} (${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"})`,
       }),
     });
 
     if (!saveRes.ok) {
       throw new Error(`Gagal mendaftarkan endpoint push ke server: status ${saveRes.status}`);
+    }
+
+    // 6. Persist subscription document in Firestore for authenticated UID
+    if (effectiveUid) {
+      try {
+        const subDocId = btoa(sub.endpoint).slice(-32).replace(/[/+=]/g, "_");
+        await setDoc(
+          doc(db, "users", effectiveUid, "pushSubscriptions", subDocId),
+          {
+            endpoint: sub.endpoint,
+            keys: subJson.keys,
+            deviceLabel: `${navigator.platform} (${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"})`,
+            userId: effectiveUid,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (fsErr) {
+        console.warn("[Push] Firestore subscription sync notice:", fsErr);
+      }
     }
 
     return { success: true, subscription: sub };
@@ -136,6 +167,16 @@ export async function unsubscribeFromWebPush(): Promise<boolean> {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ endpoint }),
       });
+
+      const currentUid = auth.currentUser?.uid;
+      if (currentUid) {
+        try {
+          const subDocId = btoa(endpoint).slice(-32).replace(/[/+=]/g, "_");
+          await deleteDoc(doc(db, "users", currentUid, "pushSubscriptions", subDocId));
+        } catch (fsErr) {
+          console.warn("[Push] Firestore delete subscription notice:", fsErr);
+        }
+      }
     }
     return true;
   } catch (err) {

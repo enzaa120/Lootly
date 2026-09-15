@@ -141,7 +141,7 @@ function playNotificationTone() {
 
 export function AiTradingDesk() {
   const navigate = useNavigate();
-  const { accountMode, settings, trades } = useAppStore();
+  const { accountMode, settings, trades, user } = useAppStore();
 
   // Firestore Subscriptions State
   const [snapshots, setSnapshots] = useState<Record<SupportedDeskTimeframe, MarketSnapshot | null>>({
@@ -248,7 +248,7 @@ export function AiTradingDesk() {
     setIsSubscribingPush(true);
     setPushStatusMessage(null);
     try {
-      const res = await subscribeToWebPush(settings?.userId || "user_trader");
+      const res = await subscribeToWebPush(user?.uid || settings?.userId || "user_trader");
       setPushPermission(getNotificationPermission());
       if (res.success) {
         setIsPushActive(true);
@@ -278,7 +278,7 @@ export function AiTradingDesk() {
 
   const handleTestPush = async () => {
     setPushStatusMessage("Mengirim tes push notifikasi ke perangkat Anda...");
-    const res = await triggerTestPushNotification(settings?.userId || "user_trader");
+    const res = await triggerTestPushNotification(user?.uid || settings?.userId || "user_trader");
     setPushStatusMessage(res.message);
   };
 

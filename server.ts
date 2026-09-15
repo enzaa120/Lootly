@@ -93,9 +93,16 @@ app.post("/api/tradingview-webhook", async (req, res) => {
 // 1. Get Public VAPID Key for client push registration
 app.get("/api/push/public-key", (_req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  const publicKey = process.env.VAPID_PUBLIC_KEY || getPublicVapidKey();
+  if (!publicKey) {
+    return res.status(500).json({
+      ok: false,
+      code: "VAPID_PUBLIC_KEY_MISSING",
+    });
+  }
   return res.json({
-    success: true,
-    publicKey: getPublicVapidKey(),
+    ok: true,
+    publicKey,
   });
 });
 
