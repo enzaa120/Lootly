@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { sendPushNotification } from "../_lib/pushService.ts";
+import { sendPushNotification } from "../_lib/pushService.js";
 
 dotenv.config();
 

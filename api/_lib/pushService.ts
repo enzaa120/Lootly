@@ -1,4 +1,6 @@
 import webpush from "web-push";
+import { serverFirebaseConfig } from "./firebaseConfig.js";
+import type { SupportedDeskTimeframe } from "./types.js";
 
 // Default production-safe VAPID credentials (can be overridden via environment variables)
 const DEFAULT_VAPID_PUBLIC_KEY =
@@ -95,6 +97,7 @@ export interface PushNotificationPayload {
     setupAnalysisId?: string;
     direction?: string;
     type?: "FORMING" | "VALID" | "TEST";
+    timeframe?: SupportedDeskTimeframe;
   };
   vibrate?: number[];
 }
@@ -166,3 +169,5 @@ export async function sendPushNotification(
 
   return { sent, failed, removed };
 }
+
+export { serverFirebaseConfig };

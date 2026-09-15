@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { registerSubscription } from "../_lib/pushService.ts";
+import { registerSubscription } from "../_lib/pushService.js";
 
 dotenv.config();
 

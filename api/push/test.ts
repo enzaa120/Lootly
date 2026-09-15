@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { sendPushNotification, getSubscriptionsForUser } from "../_lib/pushService.ts";
+import { sendPushNotification, getSubscriptionsForUser } from "../_lib/pushService.js";
 
 dotenv.config();
 
