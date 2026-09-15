@@ -1,4 +1,4 @@
-import { getTwelveDataDiagnosticStatus } from "../_lib/twelveData";
+import { getTwelveDataDiagnosticStatus } from "../_lib/twelveData.js";
 
 export const maxDuration = 30;
 

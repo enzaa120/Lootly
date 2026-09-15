@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { db } from "../lib/firebase";
 import {
@@ -8,7 +8,7 @@ import {
   query,
   orderBy,
   limit,
-  addDoc,
+  setDoc,
 } from "firebase/firestore";
 import { useAppStore } from "../store/AppContext";
 import {
@@ -17,11 +17,23 @@ import {
   SupportedDeskTimeframe,
   SetupDecisionType,
   DeskAnalysisRecord,
+  AiDeskAnalysisRecord,
   MarketDataSource,
   MarketDataApiResponse,
   QuotaStatus,
   TimeframeFeedStatus,
+  DeskNotificationSettings,
 } from "../types";
+import {
+  isPushSupported,
+  getNotificationPermission,
+  subscribeToWebPush,
+  unsubscribeFromWebPush,
+  triggerTestPushNotification,
+  dispatchPushAlert,
+  playAlertChime,
+  getExistingPushSubscription,
+} from "../lib/pushNotifications";
 import {
   evaluateDataQuality,
   normalizeCandleSequence,
@@ -44,21 +56,24 @@ import {
   CheckCircle2,
   AlertCircle,
   AlertTriangle,
-  TrendingUp,
-  TrendingDown,
   Copy,
   Check,
   ChevronDown,
   ChevronUp,
   Shield,
-  Layers,
   ArrowRight,
   Database,
-  Info,
-  Calendar,
   Zap,
   BookmarkPlus,
   RefreshCw,
+  Bell,
+  BellRing,
+  X,
+  Settings,
+  Volume2,
+  VolumeX,
+  Send,
+  Smartphone,
 } from "lucide-react";
 import { cn } from "../lib/utils";
 
@@ -96,6 +111,32 @@ function formatRelativeTime(ts: number | undefined | null): string {
   const diffHour = Math.floor(diffMin / 60);
   if (diffHour < 24) return `${diffHour} jam lalu`;
   return `${Math.floor(diffHour / 24)} hari lalu`;
+}
+
+// Web Audio synthesizer tone for confirmed setup notifications
+function playNotificationTone() {
+  try {
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(784, ctx.currentTime); // G5
+    osc.frequency.exponentialRampToValueAtTime(1046.5, ctx.currentTime + 0.15); // C6
+
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start();
+    osc.stop(ctx.currentTime + 0.5);
+  } catch (e) {
+    // Audio autoplay restrictions fallback
+  }
 }
 
 export function AiTradingDesk() {
@@ -138,15 +179,115 @@ export function AiTradingDesk() {
   const [timeframesFeed, setTimeframesFeed] = useState<Record<SupportedDeskTimeframe, TimeframeFeedStatus> | null>(null);
   const [upstreamRequestsMade, setUpstreamRequestsMade] = useState<number>(0);
 
-  // Local Controls & UI States
+  // Local Controls & Notification States
   const [isLoading, setIsLoading] = useState(true);
   const [highImpactNewsActive, setHighImpactNewsActive] = useState(false);
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [saveSuccessMsg, setSaveSuccessMsg] = useState<string | null>(null);
 
-  // Primary Function: Fetch Multi-Timeframe Data from Server (Twelve Data API + Cache + Firestore sync)
+  // Notification Banner State
+  const [activeNotification, setActiveNotification] = useState<{
+    title: string;
+    message: string;
+    direction: "BUY" | "SELL";
+    timestamp: number;
+    setupAnalysisId: string;
+    isForming?: boolean;
+  } | null>(null);
+
+  // Notification Preferences
+  const [notificationSettings, setNotificationSettings] = useState<DeskNotificationSettings>(() => {
+    try {
+      const saved = localStorage.getItem("lootly_desk_notif_settings");
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return {
+      notifyForming: true,
+      notifyValid: true,
+      soundEnabled: true,
+      pushEnabled: false,
+    };
+  });
+
+  const [desktopNotifAllowed, setDesktopNotifAllowed] = useState<boolean>(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      return Notification.permission === "granted";
+    }
+    return false;
+  });
+
+  // Web Push Infrastructure State
+  const [isPushActive, setIsPushActive] = useState(false);
+  const [pushPermission, setPushPermission] = useState<NotificationPermission>(getNotificationPermission());
+  const [isSubscribingPush, setIsSubscribingPush] = useState(false);
+  const [pushStatusMessage, setPushStatusMessage] = useState<string | null>(null);
+  const [showNotifSettings, setShowNotifSettings] = useState(false);
+
+  // Persist notification preferences
+  useEffect(() => {
+    try {
+      localStorage.setItem("lootly_desk_notif_settings", JSON.stringify(notificationSettings));
+    } catch {}
+  }, [notificationSettings]);
+
+  // Check existing push subscription on mount
+  useEffect(() => {
+    getExistingPushSubscription().then((sub) => {
+      if (sub) {
+        setIsPushActive(true);
+        setDesktopNotifAllowed(true);
+      }
+    });
+  }, []);
+
+  // Web Push Handlers
+  const handleEnableWebPush = async () => {
+    setIsSubscribingPush(true);
+    setPushStatusMessage(null);
+    try {
+      const res = await subscribeToWebPush(settings?.userId || "user_trader");
+      setPushPermission(getNotificationPermission());
+      if (res.success) {
+        setIsPushActive(true);
+        setDesktopNotifAllowed(true);
+        setNotificationSettings((prev) => ({ ...prev, pushEnabled: true }));
+        setPushStatusMessage("Web Push aktif! Notifikasi latar belakang tersambung.");
+      } else {
+        setPushStatusMessage(res.error || "Gagal mengaktifkan push notifikasi.");
+      }
+    } catch (err: any) {
+      setPushStatusMessage(err?.message || "Terjadi kesalahan saat mendaftar push notifikasi.");
+    } finally {
+      setIsSubscribingPush(false);
+    }
+  };
+
+  const handleDisableWebPush = async () => {
+    try {
+      await unsubscribeFromWebPush();
+      setIsPushActive(false);
+      setNotificationSettings((prev) => ({ ...prev, pushEnabled: false }));
+      setPushStatusMessage("Push notifikasi latar belakang telah dinonaktifkan.");
+    } catch (err: any) {
+      setPushStatusMessage("Gagal menonaktifkan push notifikasi.");
+    }
+  };
+
+  const handleTestPush = async () => {
+    setPushStatusMessage("Mengirim tes push notifikasi ke perangkat Anda...");
+    const res = await triggerTestPushNotification(settings?.userId || "user_trader");
+    setPushStatusMessage(res.message);
+  };
+
+  // Track notified setup IDs and previous state to prevent duplicate alerts
+  const notifiedSetupsRef = useRef<Set<string>>(new Set());
+  const previousStateRef = useRef<SetupDecisionType | null>(null);
+  const lastActiveSetupIdRef = useRef<string | null>(null);
+
+  // Primary Function: Fetch Multi-Timeframe Data from Server
   const fetchMarketData = async (force = false) => {
     setIsFetchingMarketData(true);
     try {
@@ -214,7 +355,6 @@ export function AiTradingDesk() {
   useEffect(() => {
     setIsLoading(true);
 
-    // A. Timeframes latest snapshots
     const timeframesCol = collection(db, "marketData", "XAUUSD", "timeframes");
     const unsubscribeTimeframes = onSnapshot(
       timeframesCol,
@@ -240,7 +380,6 @@ export function AiTradingDesk() {
       }
     );
 
-    // B. Root Metadata
     const rootDocRef = doc(db, "marketData", "XAUUSD");
     const unsubscribeRoot = onSnapshot(
       rootDocRef,
@@ -254,7 +393,6 @@ export function AiTradingDesk() {
       }
     );
 
-    // C. Rolling Candles History (H1, M15, M5)
     const qH1 = query(
       collection(db, "marketData", "XAUUSD", "candles", "H1", "items"),
       orderBy("timestamp", "desc"),
@@ -265,7 +403,7 @@ export function AiTradingDesk() {
       (snap) => {
         const list: CandleItem[] = [];
         snap.forEach((d) => list.push(d.data() as CandleItem));
-        setH1History(list.reverse()); // chronological: oldest to newest
+        setH1History(list.reverse());
       },
       (err) => console.warn("[Meja Trading AI] H1 candles notice:", err)
     );
@@ -300,17 +438,16 @@ export function AiTradingDesk() {
       (err) => console.warn("[Meja Trading AI] M5 candles notice:", err)
     );
 
-    // D. Recent Analysis History
     const qAnalyses = query(
       collection(db, "aiDeskAnalyses"),
-      orderBy("timestamp", "desc"),
-      limit(5)
+      orderBy("updatedAt", "desc"),
+      limit(6)
     );
     const unsubscribeAnalyses = onSnapshot(
       qAnalyses,
       (snap) => {
         const list: DeskAnalysisRecord[] = [];
-        snap.forEach((d) => list.push({ id: d.id, ...(d.data() as DeskAnalysisRecord) }));
+        snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
         setRecentAnalyses(list);
       },
       (err) => console.warn("[Meja Trading AI] Analyses notice:", err)
@@ -375,7 +512,6 @@ export function AiTradingDesk() {
     let dailyLossSoFar = 0;
     let consecutiveLossesSoFar = 0;
 
-    // Sort today's trades chronological to compute consecutive loss
     const sortedToday = [...todaysTrades].sort(
       (a, b) => new Date(a.createdAt || a.date).getTime() - new Date(b.createdAt || b.date).getTime()
     );
@@ -459,6 +595,230 @@ export function AiTradingDesk() {
 
   const { decision, checklist, executionPlan } = confluenceResult;
 
+  // 9. Automated Setup State Transitions & Notification Event System
+  useEffect(() => {
+    const currentState = decision.decision;
+    const prevState = previousStateRef.current;
+
+    // Stable anchor identifier for the current liquidity & structure level
+    const isBullish = h1Analysis.bias === "Bullish";
+    const prospectiveDirection: "BUY" | "SELL" = isBullish ? "BUY" : "SELL";
+    const sweepAnchor = (liquidityAnalysis.sweptPrice || 0).toFixed(2);
+    const breakAnchor = (m5Analysis.breakLevel || 0).toFixed(2);
+    const setupId = `xauusd_${prospectiveDirection.toLowerCase()}_${breakAnchor}_${sweepAnchor}`;
+
+    // CASE A: SETUP FORMING PRE-ALERT (Menunggu retest M5)
+    if (currentState === SetupDecisionType.SETUP_FORMING) {
+      const formingKey = `${setupId}_forming`;
+
+      if (!notifiedSetupsRef.current.has(formingKey)) {
+        notifiedSetupsRef.current.add(formingKey);
+
+        const formingTitle = "XAUUSD — SETUP FORMING";
+        const formingBody = `XAUUSD — Setup ${prospectiveDirection} sedang terbentuk. Menunggu retest M5.`;
+
+        // 1. Audio chime if enabled
+        if (notificationSettings.soundEnabled) {
+          playAlertChime("forming");
+        }
+
+        // 2. In-app banner
+        setActiveNotification({
+          title: formingTitle,
+          message: formingBody,
+          direction: prospectiveDirection,
+          timestamp: Date.now(),
+          setupAnalysisId: setupId,
+          isForming: true,
+        });
+
+        // 3. Desktop browser notification
+        if (notificationSettings.notifyForming && desktopNotifAllowed && "Notification" in window) {
+          try {
+            new Notification(formingTitle, {
+              body: formingBody,
+              icon: "/icon.svg",
+              badge: "/favicon.svg",
+              tag: formingKey,
+            });
+          } catch {}
+        }
+
+        // 4. Background Web Push notification
+        if (notificationSettings.pushEnabled && isPushActive) {
+          dispatchPushAlert(
+            {
+              title: formingTitle,
+              body: formingBody,
+              setupAnalysisId: setupId,
+              direction: prospectiveDirection,
+              type: "FORMING",
+            },
+            settings?.userId
+          );
+        }
+
+        // 5. Persist forming stage to Firestore
+        setDoc(
+          doc(db, "aiDeskAnalyses", setupId),
+          {
+            setupAnalysisId: setupId,
+            symbol: "XAUUSD",
+            direction: prospectiveDirection,
+            state: currentState,
+            decisionLabelIndo: decision.decisionLabelIndo,
+            preAlertSent: true,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    }
+
+    // CASE B: CONFIRMED VALID SETUP (BUY_SETUP_VALID or SELL_SETUP_VALID)
+    if (
+      (currentState === SetupDecisionType.BUY_SETUP_VALID ||
+        currentState === SetupDecisionType.SELL_SETUP_VALID) &&
+      executionPlan
+    ) {
+      const direction = currentState === SetupDecisionType.BUY_SETUP_VALID ? "BUY" : "SELL";
+      const validKey = `${setupId}_valid`;
+
+      lastActiveSetupIdRef.current = setupId;
+
+      // Prevent duplicate notifications for the same confirmed setup
+      if (!notifiedSetupsRef.current.has(validKey)) {
+        notifiedSetupsRef.current.add(validKey);
+
+        const validTitle = `XAUUSD — SETUP ${direction} VALID`;
+        const validBody = `Entry ${formatPrice(executionPlan.entryLow)}–${formatPrice(executionPlan.entryHigh)} | SL ${formatPrice(executionPlan.stopLoss)} | TP1 ${formatPrice(executionPlan.tp1)} | RR 1:${executionPlan.rrToTp1}\nCek chart sebelum eksekusi.`;
+
+        // 1. Audio chime if enabled
+        if (notificationSettings.soundEnabled) {
+          playAlertChime("valid");
+        }
+
+        // 2. In-app banner
+        setActiveNotification({
+          title: validTitle,
+          message: validBody,
+          direction,
+          timestamp: Date.now(),
+          setupAnalysisId: setupId,
+          isForming: false,
+        });
+
+        // 3. Desktop browser notification
+        if (notificationSettings.notifyValid && desktopNotifAllowed && "Notification" in window) {
+          try {
+            new Notification(validTitle, {
+              body: validBody,
+              icon: "/icon.svg",
+              badge: "/favicon.svg",
+              tag: validKey,
+            });
+          } catch {}
+        }
+
+        // 4. Background Web Push notification
+        if (notificationSettings.pushEnabled && isPushActive) {
+          dispatchPushAlert(
+            {
+              title: validTitle,
+              body: validBody,
+              setupAnalysisId: setupId,
+              direction,
+              type: "VALID",
+            },
+            settings?.userId
+          );
+        }
+
+        // 5. Persist comprehensive setup record to Firestore
+        const recordData: AiDeskAnalysisRecord = {
+          setupAnalysisId: setupId,
+          symbol: "XAUUSD",
+          direction,
+          state: currentState,
+          decisionLabelIndo: decision.decisionLabelIndo,
+          confidence: decision.confidence as any,
+          h1Bias: h1Analysis.bias,
+          m15Pullback: m15Analysis.pullbackStatus,
+          liquiditySweep: liquidityAnalysis.status,
+          m5StructureShift: m5Analysis.status,
+          displacement: m5Analysis.displacementDetected ? "Terkonfirmasi" : "Belum",
+          retest: m5Analysis.retestStatus,
+          riskStatus: riskAnalysis.riskFilter,
+          entryZone: `${formatPrice(executionPlan.entryLow)} – ${formatPrice(executionPlan.entryHigh)}`,
+          entryLow: executionPlan.entryLow,
+          entryHigh: executionPlan.entryHigh,
+          referenceEntry: executionPlan.referenceEntry,
+          stopLoss: executionPlan.stopLoss,
+          tp1: executionPlan.tp1,
+          tp2: executionPlan.tp2 ?? undefined,
+          rr: executionPlan.rrToTp1,
+          rrToTp1: executionPlan.rrToTp1,
+          rrToTp2: executionPlan.rrToTp2 ?? undefined,
+          invalidationLevel: executionPlan.invalidationLevel,
+          invalidationReason: executionPlan.invalidationReason,
+          invalidation: executionPlan.invalidation,
+          setupCreatedAt: executionPlan.setupCreatedAt,
+          setupExpiresAt: executionPlan.setupExpiresAt,
+          marketPriceAtSignal: executionPlan.marketPriceAtSignal,
+          reasons: decision.reasons,
+          marketDataTimestamp: dataQuality.latestTimestamp || Date.now(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          notificationSent: true,
+          validAlertSent: true,
+        };
+
+        setDoc(doc(db, "aiDeskAnalyses", setupId), recordData, { merge: true }).catch((err) => {
+          console.warn("[Meja AI] Gagal menyimpan aiDeskAnalyses record:", err);
+        });
+      }
+    } else if (
+      prevState === SetupDecisionType.BUY_SETUP_VALID ||
+      prevState === SetupDecisionType.SELL_SETUP_VALID
+    ) {
+      // Transitioned away from valid setup -> mark previous setup as invalidated
+      if (lastActiveSetupIdRef.current) {
+        setDoc(
+          doc(db, "aiDeskAnalyses", lastActiveSetupIdRef.current),
+          {
+            state: currentState,
+            invalidated: true,
+            updatedAt: new Date().toISOString(),
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+    }
+
+    previousStateRef.current = currentState;
+  }, [
+    decision.decision,
+    decision.decisionLabelIndo,
+    decision.confidence,
+    decision.reasons,
+    decision.invalidationText,
+    m5Analysis.breakLevel,
+    m5Analysis.status,
+    m5Analysis.retestStatus,
+    m5Analysis.displacementDetected,
+    liquidityAnalysis.sweptPrice,
+    liquidityAnalysis.status,
+    h1Analysis.bias,
+    m15Analysis.pullbackStatus,
+    riskAnalysis.riskFilter,
+    executionPlan,
+    dataQuality.latestTimestamp,
+    desktopNotifAllowed,
+    isPushActive,
+    notificationSettings,
+    settings?.userId,
+  ]);
+
   // Copy helper
   const copyToClipboard = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
@@ -466,58 +826,77 @@ export function AiTradingDesk() {
     setTimeout(() => setCopiedField(null), 2500);
   };
 
-  // 9. Save Evaluation Record / Link to Trade Plan
+  // 10. Record Evaluation as Trade Plan
   const handleRecordAsTradePlan = async () => {
     if (!executionPlan) return;
     setIsSavingPlan(true);
     setSaveSuccessMsg(null);
 
     try {
-      // 1. Create Firestore decision history record
-      const record: DeskAnalysisRecord = {
+      const direction = executionPlan.direction;
+      const sweepAnchor = (liquidityAnalysis.sweptPrice || 0).toFixed(2);
+      const breakAnchor = (m5Analysis.breakLevel || 0).toFixed(2);
+      const setupAnalysisId = `xauusd_${direction.toLowerCase()}_${breakAnchor}_${sweepAnchor}`;
+
+      const recordData: AiDeskAnalysisRecord = {
+        setupAnalysisId,
         symbol: "XAUUSD",
-        timestamp: Date.now(),
-        session: rawSession,
-        h1Context: h1Analysis,
-        m15Context: m15Analysis,
-        liquidityState: liquidityAnalysis,
-        m5Confirmation: m5Analysis,
-        retestStatus: m5Analysis.retestStatus,
-        riskStatus: riskAnalysis.status,
-        decision: decision.decision,
+        direction,
+        state: decision.decision,
         decisionLabelIndo: decision.decisionLabelIndo,
-        confidenceLabel: decision.confidence,
+        confidence: decision.confidence as any,
+        h1Bias: h1Analysis.bias,
+        m15Pullback: m15Analysis.pullbackStatus,
+        liquiditySweep: liquidityAnalysis.status,
+        m5StructureShift: m5Analysis.status,
+        displacement: m5Analysis.displacementDetected ? "Terkonfirmasi" : "Belum",
+        retest: m5Analysis.retestStatus,
+        riskStatus: riskAnalysis.riskFilter,
+        entryZone: `${formatPrice(executionPlan.entryLow)} – ${formatPrice(executionPlan.entryHigh)}`,
+        entryLow: executionPlan.entryLow,
+        entryHigh: executionPlan.entryHigh,
+        referenceEntry: executionPlan.referenceEntry,
+        stopLoss: executionPlan.stopLoss,
+        tp1: executionPlan.tp1,
+        tp2: executionPlan.tp2 ?? undefined,
+        rr: executionPlan.rrToTp1,
+        rrToTp1: executionPlan.rrToTp1,
+        rrToTp2: executionPlan.rrToTp2 ?? undefined,
+        invalidationLevel: executionPlan.invalidationLevel,
+        invalidationReason: executionPlan.invalidationReason,
+        invalidation: executionPlan.invalidation,
+        setupCreatedAt: executionPlan.setupCreatedAt,
+        setupExpiresAt: executionPlan.setupExpiresAt,
+        marketPriceAtSignal: executionPlan.marketPriceAtSignal,
         reasons: decision.reasons,
-        invalidation: decision.invalidationText,
-        executionPlan,
-        ruleVersion: "lootly-xauusd-v1",
+        marketDataTimestamp: dataQuality.latestTimestamp || Date.now(),
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        notificationSent: true,
       };
 
-      const docRef = await addDoc(collection(db, "aiDeskAnalyses"), record);
-      const setupAnalysisId = docRef.id;
+      await setDoc(doc(db, "aiDeskAnalyses", setupAnalysisId), recordData, { merge: true });
 
-      setSaveSuccessMsg("Evaluasi tersimpan di riwayat. Mengalihkan ke formulir rencana...");
+      setSaveSuccessMsg("Rencana trade tersimpan. Mengalihkan ke formulir eksekusi...");
 
-      // 2. Navigate to Add Trade with prefillPlan
       setTimeout(() => {
         navigate("/add", {
           state: {
             prefillPlan: {
               asset: "XAU/USD",
               direction: executionPlan.direction.toLowerCase(),
-              entryPrice: m5Analysis.breakLevel || latestPrice,
-              stopLoss: executionPlan.stopLossRef,
-              takeProfit: executionPlan.takeProfitRef,
-              tradeReason: `[Meja AI - ${executionPlan.htfBias}] Area: ${executionPlan.m15Area} | Likuiditas: ${executionPlan.liquidityEvent} | Konfirmasi: ${executionPlan.m5Confirmation}`,
-              setupTag: "AI Trading Desk - Institutional Plan",
+              entryPrice: executionPlan.referenceEntry || m5Analysis.breakLevel || latestPrice,
+              stopLoss: executionPlan.stopLoss,
+              takeProfit: executionPlan.tp1,
+              tradeReason: `[Lootly Setup ${executionPlan.direction}] Area: ${formatPrice(executionPlan.entryLow)}–${formatPrice(executionPlan.entryHigh)} | SL: $${formatPrice(executionPlan.stopLoss)} | TP1: $${formatPrice(executionPlan.tp1)} | RR 1:${executionPlan.rrToTp1}`,
+              setupTag: "Lootly AI Desk - Setup Valid",
               setupAnalysisId,
             },
           },
         });
-      }, 750);
+      }, 600);
     } catch (err: any) {
-      console.error("Gagal menyimpan analisis:", err);
+      console.error("Gagal menyimpan rencana trade:", err);
       setSaveSuccessMsg(`Error: ${err.message || String(err)}`);
     } finally {
       setIsSavingPlan(false);
@@ -526,11 +905,19 @@ export function AiTradingDesk() {
 
   const webhookUrl = `${window.location.origin}/api/tradingview-webhook`;
 
+  const isBuySetupValid = decision.decision === SetupDecisionType.BUY_SETUP_VALID;
+  const isSellSetupValid = decision.decision === SetupDecisionType.SELL_SETUP_VALID;
+  const isSetupForming = decision.decision === SetupDecisionType.SETUP_FORMING;
+  const isSetupExpired = decision.decision === SetupDecisionType.SETUP_EXPIRED;
+  const isWaitBuy = decision.decision === SetupDecisionType.WAIT_BUY;
+  const isWaitSell = decision.decision === SetupDecisionType.WAIT_SELL;
+  const isNoTrade = decision.decision === SetupDecisionType.NO_TRADE;
+
   return (
-    <div id="ai-trading-desk-page" className="space-y-6 pb-12 max-w-7xl mx-auto">
-      {/* 1. TOP HEADER & INSTITUTIONAL BRANDING */}
+    <div id="ai-trading-desk-page" className="space-y-6 pb-12 max-w-5xl mx-auto">
+      {/* 1. TOP HEADER & MARKET CONTEXT */}
       <div id="desk-header" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs">
-        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="space-y-1">
             <div className="flex items-center gap-2.5 flex-wrap">
               <div className="w-8 h-8 rounded-lg bg-zinc-900 text-white flex items-center justify-center font-bold shadow-xs">
@@ -540,799 +927,520 @@ export function AiTradingDesk() {
                 Meja Trading AI
               </h1>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-700 border border-zinc-200">
-                Fase 2 • Mesin Keputusan
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200">
-                Instrumen: XAUUSD (Gold)
+                XAUUSD
               </span>
 
-              {/* Dynamic Market Data Source Indicator */}
+              {/* Live Market Data Source Indicator */}
               {(dataSource === "twelvedata" || dataSource === "twelve_data") && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200 flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Sumber: Twelve Data API
+                  Twelve Data (Live)
                 </span>
               )}
               {dataSource === "cache" && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
-                  Sumber: Twelve Data (Cache Server)
+                  Twelve Data (Cache)
                 </span>
               )}
               {dataSource === "tradingview" && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1.5">
+                <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  Sumber: TradingView Webhook (Fallback)
-                </span>
-              )}
-              {apiStatus === "missing_api_key" && (
-                <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-zinc-100 text-zinc-600 border border-zinc-300 flex items-center gap-1.5" title="TWELVE_DATA_API_KEY belum dikonfigurasi di environment server">
-                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
-                  Twelve Data: Menunggu API Key
+                  TradingView Fallback
                 </span>
               )}
             </div>
-            <p className="text-sm text-zinc-500">
-              Konteks pasar multi-timeframe dan dukungan keputusan terstruktur berbasis aturan institusional pribadi.
+            <p className="text-xs text-zinc-500">
+              Lapisan validasi setup & filter risiko terstruktur sebelum eksekusi di Exness.
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5 flex-wrap">
-            {/* Twelve Data API Refresh Button */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Notification Control & Settings Popover Opener */}
+            <button
+              id="desk-notification-settings-btn"
+              onClick={() => setShowNotifSettings(true)}
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg text-xs font-semibold border transition-colors flex items-center gap-1.5 shadow-2xs",
+                isPushActive
+                  ? "bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100"
+                  : desktopNotifAllowed
+                  ? "bg-sky-50 border-sky-300 text-sky-800 hover:bg-sky-100"
+                  : "bg-white border-zinc-200 text-zinc-700 hover:bg-zinc-50"
+              )}
+              title="Konfigurasi Web Push, Desktop Alert & Suara"
+            >
+              {isPushActive ? (
+                <BellRing className="w-3.5 h-3.5 text-emerald-600 animate-pulse" />
+              ) : (
+                <Bell className="w-3.5 h-3.5 text-zinc-500" />
+              )}
+              <span>
+                {isPushActive ? "Push Aktif" : desktopNotifAllowed ? "Notif Aktif" : "Set Notifikasi"}
+              </span>
+              <Settings className="w-3 h-3 opacity-60 ml-0.5" />
+            </button>
+
+            {/* Market Data Refresh Button */}
             <button
               id="refresh-market-data-btn"
               onClick={() => fetchMarketData(true)}
               disabled={isFetchingMarketData}
               className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 border border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition-colors flex items-center gap-1.5 shadow-2xs disabled:opacity-50"
-              title="Perbarui data candle multi-timeframe XAU/USD dari Twelve Data API"
+              title="Perbarui feed candle multi-timeframe XAU/USD"
             >
               <RefreshCw className={cn("w-3.5 h-3.5 text-emerald-600", isFetchingMarketData && "animate-spin")} />
-              {isFetchingMarketData ? "Memperbarui..." : "Perbarui Data Market"}
+              {isFetchingMarketData ? "Memperbarui..." : "Perbarui Feed"}
             </button>
 
-            {/* Macro News Caution Toggle */}
+            {/* High Impact News caution button */}
             <button
               id="toggle-news-mode-btn"
               onClick={() => setHighImpactNewsActive(!highImpactNewsActive)}
               className={cn(
-                "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5",
+                "px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors flex items-center gap-1.5",
                 highImpactNewsActive
                   ? "bg-rose-50 border-rose-300 text-rose-700 hover:bg-rose-100"
                   : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-50"
               )}
-              title="Aktifkan saat rilis berita ekonomi berdampak tinggi (FOMC, CPI, NFP)"
+              title="Aktifkan saat ada rilis berita berdampak tinggi"
             >
               <AlertTriangle className={cn("w-3.5 h-3.5", highImpactNewsActive ? "text-rose-600" : "text-zinc-400")} />
-              {highImpactNewsActive ? "Mode Berita: AKTIF" : "Mode Berita: Standar"}
-            </button>
-
-            {/* Webhook Guide Modal Trigger (Fallback / Debug) */}
-            <button
-              id="open-webhook-guide-btn"
-              onClick={() => setShowGuide(!showGuide)}
-              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-900 text-white hover:bg-zinc-800 transition-colors flex items-center gap-1.5 shadow-xs"
-              title="Konfigurasi webhook TradingView sebagai jalur cadangan (fallback/debug)"
-            >
-              <Radio className="w-3.5 h-3.5 text-emerald-400" />
-              Jalur Cadangan Webhook
-              {showGuide ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              {highImpactNewsActive ? "Berita Aktif" : "Mode Normal"}
             </button>
           </div>
         </div>
 
-        {/* 2. REALTIME FEED CONTEXT BAR */}
-        <div className="mt-5 pt-4 border-t border-zinc-100 grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+        {/* Realtime Snapshot Ribbon */}
+        <div className="mt-4 pt-3.5 border-t border-zinc-100 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
           <div>
-            <span className="text-zinc-400 block font-medium">Harga XAUUSD Terkini</span>
+            <span className="text-zinc-400 block font-medium text-[11px]">Harga Live XAUUSD</span>
             <span className="text-base font-bold text-zinc-900">
               {latestPrice !== null ? `$${formatPrice(latestPrice)}` : "Menunggu data"}
             </span>
           </div>
 
           <div>
-            <span className="text-zinc-400 block font-medium">Sesi Pasar</span>
-            <span className={cn("inline-flex items-center px-2 py-0.5 mt-0.5 rounded text-xs font-semibold border", sessionInfo.badgeColor)}>
+            <span className="text-zinc-400 block font-medium text-[11px]">Sesi Pasar</span>
+            <span className={cn("inline-flex items-center px-2 py-0.5 mt-0.5 rounded text-[11px] font-semibold border", sessionInfo.badgeColor)}>
               {sessionInfo.sessionLabel}
             </span>
           </div>
 
           <div>
-            <span className="text-zinc-400 block font-medium">Pembaruan Terakhir</span>
-            <span className="text-zinc-800 font-medium block mt-0.5">
+            <span className="text-zinc-400 block font-medium text-[11px]">Pembaruan Terakhir</span>
+            <span className="text-zinc-700 font-medium block mt-0.5">
               {formatRelativeTime(dataQuality.latestTimestamp)}
             </span>
           </div>
 
           <div>
-            <span className="text-zinc-400 block font-medium">Akun Lootly Terhubung</span>
-            <span className="text-zinc-800 font-semibold uppercase block mt-0.5">
-              Mode {accountMode} • Limit Loss: Rp {todayRiskStats.dailyLossLimit.toLocaleString("id-ID")}
+            <span className="text-zinc-400 block font-medium text-[11px]">Filter Risiko Akun</span>
+            <span className={cn(
+              "font-bold block mt-0.5 text-xs",
+              riskAnalysis.riskFilter === "AMAN"
+                ? "text-emerald-700"
+                : riskAnalysis.riskFilter === "PERINGATAN"
+                ? "text-amber-700"
+                : "text-rose-700"
+            )}>
+              {riskAnalysis.riskFilter} ({accountMode.toUpperCase()})
             </span>
           </div>
         </div>
       </div>
 
-      {/* WEBHOOK GUIDE ACCORDION */}
-      {showGuide && (
-        <div id="webhook-guide-panel" className="bg-zinc-900 text-zinc-100 border border-zinc-800 rounded-xl p-5 space-y-4 shadow-sm text-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
-            <div className="flex items-center gap-2">
-              <Radio className="w-4 h-4 text-emerald-400" />
-              <span className="font-semibold text-sm text-white">Panduan Integrasi TradingView Webhook</span>
-            </div>
-            <button
-              onClick={() => setShowGuide(false)}
-              className="text-zinc-400 hover:text-white"
-            >
-              Tutup
-            </button>
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-zinc-300">
-              Buat 3 Alert di TradingView untuk instrumen <strong>XAUUSD</strong> pada timeframe <strong>H1</strong>, <strong>M15</strong>, dan <strong>M5</strong> dengan kondisi: <em>"Once Per Bar Close"</em>.
-            </p>
-
-            <div className="space-y-1">
-              <label className="text-zinc-400 font-mono">Webhook URL Endpoint:</label>
+      {/* NOTIFICATION SETTINGS MODAL */}
+      {showNotifSettings && (
+        <div
+          id="desk-notif-settings-modal"
+          className="fixed inset-0 z-50 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div className="bg-white border border-zinc-200 rounded-xl shadow-xl w-full max-w-md p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
               <div className="flex items-center gap-2">
+                <BellRing className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-zinc-900 text-sm">Pengaturan Notifikasi Setup AI</h3>
+              </div>
+              <button
+                onClick={() => setShowNotifSettings(false)}
+                className="p-1 rounded-lg text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Notification Toggles */}
+            <div className="space-y-3 text-xs">
+              {/* Toggle 1: Setup Forming Alert */}
+              <label className="flex items-center justify-between p-3 rounded-lg border border-zinc-200 hover:bg-zinc-50 cursor-pointer">
+                <div>
+                  <span className="font-bold text-zinc-800 block">Pre-Alert: Setup Terbentuk</span>
+                  <span className="text-zinc-500 text-[11px] block mt-0.5">
+                    Notifikasi awal saat M5 MSS terbentuk sebelum konfirmasi retest.
+                  </span>
+                </div>
                 <input
-                  type="text"
-                  readOnly
-                  value={webhookUrl}
-                  className="bg-zinc-950 border border-zinc-800 text-emerald-400 font-mono text-xs px-3 py-1.5 rounded w-full select-all"
+                  type="checkbox"
+                  checked={notificationSettings.notifyForming}
+                  onChange={(e) =>
+                    setNotificationSettings((prev) => ({ ...prev, notifyForming: e.target.checked }))
+                  }
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-zinc-300"
                 />
-                <button
-                  onClick={() => copyToClipboard(webhookUrl, "url")}
-                  className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded font-medium flex items-center gap-1 shrink-0"
+              </label>
+
+              {/* Toggle 2: Setup Valid Confirmed Alert */}
+              <label className="flex items-center justify-between p-3 rounded-lg border border-zinc-200 hover:bg-zinc-50 cursor-pointer">
+                <div>
+                  <span className="font-bold text-zinc-800 block">Alert Setup Valid Terkonfirmasi</span>
+                  <span className="text-zinc-500 text-[11px] block mt-0.5">
+                    Notifikasi lengkap saat seluruh konfluensi & RR &ge; 2.0 terpenuhi.
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={notificationSettings.notifyValid}
+                  onChange={(e) =>
+                    setNotificationSettings((prev) => ({ ...prev, notifyValid: e.target.checked }))
+                  }
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-zinc-300"
+                />
+              </label>
+
+              {/* Toggle 3: Audio Tone Chime */}
+              <label className="flex items-center justify-between p-3 rounded-lg border border-zinc-200 hover:bg-zinc-50 cursor-pointer">
+                <div className="flex items-center gap-2">
+                  {notificationSettings.soundEnabled ? (
+                    <Volume2 className="w-4 h-4 text-emerald-600" />
+                  ) : (
+                    <VolumeX className="w-4 h-4 text-zinc-400" />
+                  )}
+                  <div>
+                    <span className="font-bold text-zinc-800 block">Suara Audio Chime</span>
+                    <span className="text-zinc-500 text-[11px] block mt-0.5">
+                      Bunyikan nada instan di tab browser saat ada sinyal.
+                    </span>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={notificationSettings.soundEnabled}
+                  onChange={(e) =>
+                    setNotificationSettings((prev) => ({ ...prev, soundEnabled: e.target.checked }))
+                  }
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-zinc-300"
+                />
+              </label>
+            </div>
+
+            {/* Web Push Infrastructure Panel */}
+            <div className="p-3.5 bg-zinc-50 rounded-xl border border-zinc-200 space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Smartphone className="w-4 h-4 text-zinc-600" />
+                  <span className="font-bold text-zinc-900">Web Push Latar Belakang (PWA)</span>
+                </div>
+                <span
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-bold border",
+                    isPushActive
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-200"
+                      : pushPermission === "denied"
+                      ? "bg-rose-100 text-rose-800 border-rose-200"
+                      : "bg-zinc-200 text-zinc-700 border-zinc-300"
+                  )}
                 >
-                  {copiedField === "url" ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  Salin URL
-                </button>
+                  {isPushActive ? "Aktif & Tersambung" : pushPermission === "denied" ? "Izin Ditolak" : "Belum Aktif"}
+                </span>
+              </div>
+
+              <p className="text-[11px] text-zinc-500 leading-relaxed">
+                Menerima notifikasi setup valid XAU/USD bahkan saat tab browser ditutup atau diminimalkan.
+              </p>
+
+              {pushStatusMessage && (
+                <div className="p-2 bg-white rounded border border-zinc-200 text-[11px] text-zinc-700 font-medium">
+                  {pushStatusMessage}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                {!isPushActive ? (
+                  <button
+                    id="enable-web-push-btn"
+                    onClick={handleEnableWebPush}
+                    disabled={isSubscribingPush || !isPushSupported()}
+                    className="w-full py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors disabled:opacity-50"
+                  >
+                    <Bell className="w-3.5 h-3.5" />
+                    {isSubscribingPush ? "Menyambungkan Push..." : "Aktifkan Web Push Sekarang"}
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      id="test-web-push-btn"
+                      onClick={handleTestPush}
+                      className="flex-1 py-1.5 bg-white border border-zinc-300 text-zinc-700 hover:bg-zinc-100 rounded-lg font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+                    >
+                      <Send className="w-3 h-3 text-emerald-600" />
+                      Kirim Tes Push
+                    </button>
+                    <button
+                      id="disable-web-push-btn"
+                      onClick={handleDisableWebPush}
+                      className="px-3 py-1.5 text-zinc-500 hover:text-rose-600 text-xs font-medium transition-colors"
+                    >
+                      Nonaktifkan
+                    </button>
+                  </>
+                )}
               </div>
             </div>
 
-            <div className="space-y-1 pt-2">
-              <label className="text-zinc-400 font-mono">Format Pesan Alert TradingView (JSON):</label>
-              <pre className="bg-zinc-950 border border-zinc-800 text-zinc-300 font-mono text-xs p-3 rounded overflow-x-auto">
-{`{
-  "secret": "TRADINGVIEW_SECRET_ANDA",
-  "symbol": "XAUUSD",
-  "timeframe": "{{interval}}",
-  "open": {{open}},
-  "high": {{high}},
-  "low": {{low}},
-  "close": {{close}},
-  "volume": {{volume}},
-  "timestamp": {{time}}
-}`}
-              </pre>
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setShowNotifSettings(false)}
+                className="px-4 py-2 bg-zinc-900 text-white rounded-lg font-bold text-xs hover:bg-zinc-800 transition-colors"
+              >
+                Selesai
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Informative Data Status Banner */}
-      {apiStatus === "missing_api_key" && !snapshots.H1 && !snapshots.M5 && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-900">
-          <div className="flex items-start gap-2.5">
-            <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
-            <div className="space-y-0.5">
-              <span className="font-bold block">Konfigurasi Sumber Data Otomatis Twelve Data</span>
-              <p className="text-amber-800 leading-relaxed">
-                Tambahkan kunci <code className="bg-amber-100/80 px-1 py-0.5 rounded font-mono text-[11px]">TWELVE_DATA_API_KEY</code> pada environment server untuk sinkronisasi pasar real-time tanpa perlu alert eksternal. Anda juga tetap dapat mengalirkan candle melalui tombol <strong>Jalur Cadangan Webhook</strong> di atas.
+      {/* 2. ACTIVE SETUP NOTIFICATION BANNER (FORMING OR CONFIRMED) */}
+      {activeNotification && (
+        <div
+          id="active-setup-notification"
+          className={cn(
+            "p-4 rounded-xl border flex items-center justify-between gap-3 shadow-sm transition-all",
+            activeNotification.isForming
+              ? "bg-amber-50/90 border-amber-300 text-amber-950"
+              : "bg-emerald-50 border-emerald-300 text-emerald-950"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className={cn(
+                "w-8 h-8 rounded-full text-white flex items-center justify-center shrink-0 shadow-xs",
+                activeNotification.isForming ? "bg-amber-600" : "bg-emerald-600"
+              )}
+            >
+              <BellRing className="w-4 h-4 animate-bounce" />
+            </div>
+            <div>
+              <span
+                className={cn(
+                  "font-bold text-xs uppercase tracking-wider block",
+                  activeNotification.isForming ? "text-amber-800" : "text-emerald-800"
+                )}
+              >
+                {activeNotification.title}
+              </span>
+              <p className="text-sm font-semibold mt-0.5">
+                {activeNotification.message}
               </p>
             </div>
           </div>
           <button
-            onClick={() => setShowGuide(true)}
-            className="px-3 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 rounded font-semibold text-xs transition-colors shrink-0"
+            onClick={() => setActiveNotification(null)}
+            className="p-1 rounded-lg text-zinc-500 hover:bg-zinc-200/50 transition-colors"
+            title="Tutup notifikasi"
           >
-            Buka Jalur Webhook
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Quota Hard Protection Banner */}
-      {quotaStatus?.hardLimitReached && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center gap-3 text-xs text-rose-900">
-          <AlertCircle className="w-5 h-5 text-rose-600 shrink-0" />
-          <div className="space-y-0.5">
-            <span className="font-bold block">
-              Proteksi Kuota Harian Aktif ({quotaStatus.estimatedUsedToday}/{quotaStatus.maxDailyLimit || 800} Request)
-            </span>
-            <p className="text-rose-700">
-              Batas aman kuota Twelve Data telah tercapai. Permintaan upstream baru dihentikan sementara dan data pasar disajikan aman dari cache Firestore tanpa pemanggilan API berlebih.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Market Closed Notice Banner */}
-      {marketStatus && !marketStatus.isOpen && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 flex items-center gap-3 text-xs text-amber-900">
-          <Clock className="w-5 h-5 text-amber-600 shrink-0" />
-          <div className="space-y-0.5">
-            <span className="font-bold block">Pasar XAU/USD Sedang Tutup</span>
-            <p className="text-amber-800">
-              {marketStatus.reason} Harga penutupan terakhir tetap valid. Validasi setup baru ditunda hingga sesi pasar dibuka kembali.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* 3. CORE INSTITUTIONAL DECISION BANNER */}
+      {/* 3. MAIN DECISION CARD (PRIMARY FOCAL POINT) */}
       <div
-        id="institutional-decision-card"
+        id="main-decision-card"
         className={cn(
-          "border rounded-xl p-5 shadow-xs transition-all",
-          decision.decision === SetupDecisionType.VALID_SETUP
-            ? "bg-emerald-50/70 border-emerald-300"
-            : decision.decision === SetupDecisionType.WAIT
-            ? "bg-amber-50/70 border-amber-300"
-            : "bg-zinc-50 border-zinc-200"
+          "border-2 rounded-xl p-6 shadow-xs transition-all",
+          isBuySetupValid || isSellSetupValid
+            ? "bg-emerald-50/70 border-emerald-400"
+            : isSetupForming
+            ? "bg-amber-50/70 border-amber-400"
+            : isSetupExpired
+            ? "bg-rose-50/70 border-rose-400"
+            : isWaitBuy || isWaitSell
+            ? "bg-amber-50/60 border-amber-300"
+            : "bg-zinc-50/90 border-zinc-300"
         )}
       >
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 pb-4 border-b border-zinc-200/80">
-          <div>
-            <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider block">
-              Keputusan Akhir Mesin Institusional
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-4 border-b border-zinc-200/80">
+          <div className="space-y-1.5">
+            <span className="text-[11px] font-bold text-zinc-500 uppercase tracking-wider block">
+              Keputusan Setup XAUUSD
             </span>
-            <div className="flex items-center gap-3 mt-1">
+            <div className="flex items-center gap-3 flex-wrap">
               <h2
                 className={cn(
-                  "text-2xl font-black tracking-tight",
-                  decision.decision === SetupDecisionType.VALID_SETUP
+                  "text-2xl sm:text-3xl font-black tracking-tight",
+                  isBuySetupValid || isSellSetupValid
                     ? "text-emerald-800"
-                    : decision.decision === SetupDecisionType.WAIT
+                    : isSetupForming
+                    ? "text-amber-800"
+                    : isSetupExpired
+                    ? "text-rose-800"
+                    : isWaitBuy || isWaitSell
                     ? "text-amber-800"
                     : "text-zinc-800"
                 )}
               >
                 {decision.decisionLabelIndo}
               </h2>
+
+              {/* Direction Badge */}
               <span
                 className={cn(
-                  "px-2.5 py-0.5 rounded-full text-xs font-bold border uppercase tracking-wider",
-                  decision.confidence === "Tinggi"
+                  "px-3 py-1 rounded-full text-xs font-bold border uppercase tracking-wider",
+                  isBuySetupValid || isWaitBuy
+                    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                    : isSellSetupValid || isWaitSell
+                    ? "bg-rose-100 text-rose-800 border-rose-300"
+                    : isSetupExpired
+                    ? "bg-rose-100 text-rose-700 border-rose-200"
+                    : "bg-zinc-200 text-zinc-700 border-zinc-300"
+                )}
+              >
+                Arah: {h1Analysis.bias === "Bullish" ? "BUY" : h1Analysis.bias === "Bearish" ? "SELL" : "NETRAL"}
+              </span>
+
+              {/* Confluence Quality */}
+              <span
+                className={cn(
+                  "px-2.5 py-1 rounded-full text-xs font-semibold border",
+                  decision.confidence === "Kuat"
                     ? "bg-emerald-100 text-emerald-800 border-emerald-200"
                     : decision.confidence === "Sedang"
                     ? "bg-amber-100 text-amber-800 border-amber-200"
                     : "bg-zinc-200 text-zinc-700 border-zinc-300"
                 )}
               >
-                Konfluensi: {decision.confidence}
+                Kualitas Konfluensi: {decision.confidence}
               </span>
             </div>
           </div>
 
-          <div className="text-right">
-            <span className="text-xs text-zinc-500 block">Status Kelayakan Entry</span>
+          <div className="sm:text-right">
+            <span className="text-[11px] text-zinc-500 block font-medium">Kelayakan Eksekusi</span>
             <span
               className={cn(
                 "text-sm font-bold block mt-0.5",
-                decision.isReadyForEntry ? "text-emerald-700" : "text-zinc-600"
+                isBuySetupValid || isSellSetupValid
+                  ? "text-emerald-700"
+                  : isSetupForming
+                  ? "text-amber-700"
+                  : isSetupExpired
+                  ? "text-rose-700"
+                  : isWaitBuy || isWaitSell
+                  ? "text-amber-700"
+                  : "text-zinc-600"
               )}
             >
-              {decision.isReadyForEntry
-                ? "Layak Dipertimbangkan Sesuai Plan"
-                : "Belum Layak Entry (Konfluensi Belum Lengkap)"}
+              {isBuySetupValid || isSellSetupValid
+                ? "Layak Eksekusi Sesuai Plan"
+                : isSetupForming
+                ? "Pre-Alert: Menunggu Retest M5"
+                : isSetupExpired
+                ? "Setup Kedaluwarsa (Batal)"
+                : isWaitBuy || isWaitSell
+                ? "Tunggu Konfirmasi Lengkap"
+                : "Tidak Ada Trade (Disiplin)"}
             </span>
           </div>
         </div>
 
-        {/* Narrative reasons */}
-        <div className="pt-4 space-y-2">
-          <span className="text-xs font-semibold text-zinc-700 block">Dasar Pertimbangan Mesin Aturan:</span>
-          <ul className="space-y-1.5 text-xs text-zinc-700">
-            {decision.reasons.map((r, i) => (
-              <li key={i} className="flex items-start gap-2">
-                <span className="text-zinc-400 mt-0.5">•</span>
-                <span>{r}</span>
-              </li>
-            ))}
-          </ul>
+        {/* Narrative reason */}
+        <div className="pt-4">
+          <p className="text-xs text-zinc-700 font-medium leading-relaxed">
+            {decision.reasons[0] || "Menunggu pemenuhan seluruh tahapan aturan struktur harga."}
+          </p>
         </div>
       </div>
 
-      {/* 4. THREE TIMEFRAME ARCHITECTURE CARDS */}
-      <div id="timeframe-cards-grid" className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        {/* CARD 1: H1 CONTEXT */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 font-bold text-xs">
-                  H1
-                </span>
-                <span className="font-bold text-zinc-900 text-sm">Tren & Konteks Makro</span>
-              </div>
-              <span className="text-xs text-zinc-400">
-                {h1Candles.length} candle
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {snapshots.H1 ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">Bias Tren H1:</span>
-                    <span
-                      className={cn(
-                        "text-xs font-bold px-2 py-0.5 rounded border",
-                        h1Analysis.bias === "Bullish"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : h1Analysis.bias === "Bearish"
-                          ? "bg-rose-50 text-rose-700 border-rose-200"
-                          : "bg-zinc-100 text-zinc-700 border-zinc-200"
-                      )}
-                    >
-                      {h1Analysis.bias}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">Struktur Pasar:</span>
-                    <span className="font-semibold text-zinc-800">{h1Analysis.structure}</span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">Momentum:</span>
-                    <span className="font-medium text-zinc-700">{h1Analysis.momentum}</span>
-                  </div>
-
-                  <div className="p-2.5 bg-zinc-50 rounded-lg text-xs text-zinc-600 border border-zinc-100 leading-relaxed">
-                    {h1Analysis.reason}
-                  </div>
-                </>
-              ) : (
-                <div className="py-8 text-center text-xs text-zinc-400 space-y-1">
-                  <Database className="w-6 h-6 text-zinc-300 mx-auto mb-2" />
-                  <p className="font-semibold text-zinc-600">Belum ada data H1</p>
-                  <p>Menunggu data candle dari Twelve Data API atau TradingView webhook</p>
-                </div>
-              )}
-            </div>
+      {/* 4. COMPACT CHECKLIST UI */}
+      <div id="setup-checklist-panel" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <h3 className="font-bold text-zinc-900 text-sm">Checklist Validasi Setup XAUUSD</h3>
           </div>
-
-          <div className="mt-4 pt-3 border-t border-zinc-100 text-[11px] text-zinc-400 flex justify-between">
-            <span>Tutup H1: {snapshots.H1 ? `$${formatPrice(snapshots.H1.close)}` : "-"}</span>
-            <span>{snapshots.H1 ? formatRelativeTime(snapshots.H1.timestamp) : "-"}</span>
-          </div>
+          <span className="text-xs font-semibold text-zinc-500">
+            {checklist.filter((c) => c.status === "passed").length} dari 7 Terpenuhi
+          </span>
         </div>
 
-        {/* CARD 2: M15 LOCATION & PULLBACK */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-purple-50 text-purple-700 border border-purple-200 font-bold text-xs">
-                  M15
-                </span>
-                <span className="font-bold text-zinc-900 text-sm">Lokasi & Area Penting</span>
-              </div>
-              <span className="text-xs text-zinc-400">
-                {m15Candles.length} candle
-              </span>
-            </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5 text-xs">
+          {checklist.map((item) => {
+            const isPassed = item.status === "passed";
+            const isWaiting = item.status === "waiting";
+            const isFailed = item.status === "failed";
 
-            <div className="mt-4 space-y-3">
-              {snapshots.M15 ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">Lokasi Relatif:</span>
-                    <span className="text-xs font-bold text-zinc-800">
-                      {m15Analysis.location}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">Status Pullback:</span>
-                    <span
-                      className={cn(
-                        "font-semibold px-2 py-0.5 rounded text-[11px] border",
-                        m15Analysis.pullbackStatus === "Pullback Valid"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : m15Analysis.pullbackStatus === "Overextended"
-                          ? "bg-rose-50 text-rose-700 border-rose-200"
-                          : "bg-amber-50 text-amber-700 border-amber-200"
-                      )}
-                    >
-                      {m15Analysis.pullbackStatus}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">First Touch:</span>
-                    <span className="font-medium text-zinc-700">
-                      {m15Analysis.isFirstTouch ? "Ya (Sentuhan Awal)" : "Tidak (Sudah Teruji)"}
-                    </span>
-                  </div>
-
-                  <div className="p-2.5 bg-zinc-50 rounded-lg text-xs text-zinc-600 border border-zinc-100 leading-relaxed">
-                    {m15Analysis.reason}
-                  </div>
-                </>
-              ) : (
-                <div className="py-8 text-center text-xs text-zinc-400 space-y-1">
-                  <Database className="w-6 h-6 text-zinc-300 mx-auto mb-2" />
-                  <p className="font-semibold text-zinc-600">Belum ada data M15</p>
-                  <p>Menunggu data candle dari Twelve Data API atau TradingView webhook</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-zinc-100 text-[11px] text-zinc-400 flex justify-between">
-            <span>Tutup M15: {snapshots.M15 ? `$${formatPrice(snapshots.M15.close)}` : "-"}</span>
-            <span>{snapshots.M15 ? formatRelativeTime(snapshots.M15.timestamp) : "-"}</span>
-          </div>
-        </div>
-
-        {/* CARD 3: M5 CONFIRMATION & RETEST */}
-        <div className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <span className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold text-xs">
-                  M5
-                </span>
-                <span className="font-bold text-zinc-900 text-sm">Konfirmasi & Retest</span>
-              </div>
-              <span className="text-xs text-zinc-400">
-                {m5Candles.length} candle
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {snapshots.M5 ? (
-                <>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">Pergeseran CHoCH/MSS:</span>
-                    <span
-                      className={cn(
-                        "text-xs font-semibold px-2 py-0.5 rounded border",
-                        m5Analysis.chochDetected
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-zinc-100 text-zinc-600 border-zinc-200"
-                      )}
-                    >
-                      {m5Analysis.chochDetected ? "Terdeteksi" : "Belum Ada"}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">Displacement:</span>
-                    <span className="font-medium text-zinc-800">
-                      {m5Analysis.displacementDetected ? "Solid & Valid" : "Belum Tampak"}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-zinc-500">Status Retest:</span>
-                    <span
-                      className={cn(
-                        "font-bold px-2 py-0.5 rounded border text-[11px]",
-                        m5Analysis.retestStatus === "Valid"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : m5Analysis.retestStatus === "Menunggu"
-                          ? "bg-amber-50 text-amber-700 border-amber-200"
-                          : m5Analysis.retestStatus === "Gagal"
-                          ? "bg-rose-50 text-rose-700 border-rose-200"
-                          : "bg-zinc-100 text-zinc-600 border-zinc-200"
-                      )}
-                    >
-                      {m5Analysis.retestStatus}
-                    </span>
-                  </div>
-
-                  <div className="p-2.5 bg-zinc-50 rounded-lg text-xs text-zinc-600 border border-zinc-100 leading-relaxed">
-                    {m5Analysis.reason}
-                  </div>
-                </>
-              ) : (
-                <div className="py-8 text-center text-xs text-zinc-400 space-y-1">
-                  <Database className="w-6 h-6 text-zinc-300 mx-auto mb-2" />
-                  <p className="font-semibold text-zinc-600">Belum ada data M5</p>
-                  <p>Menunggu data candle dari Twelve Data API atau TradingView webhook</p>
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-zinc-100 text-[11px] text-zinc-400 flex justify-between">
-            <span>Tutup M5: {snapshots.M5 ? `$${formatPrice(snapshots.M5.close)}` : "-"}</span>
-            <span>{snapshots.M5 ? formatRelativeTime(snapshots.M5.timestamp) : "-"}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* 5. LIQUIDITY ENGINE & DATA QUALITY ROW */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {/* LIQUIDITY ENGINE CARD */}
-        <div id="liquidity-panel" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-            <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-amber-500" />
-              <h3 className="font-bold text-zinc-900 text-sm">Status Likuiditas Teramati</h3>
-            </div>
-            <span
-              className={cn(
-                "px-2.5 py-0.5 rounded text-xs font-semibold border",
-                liquidityAnalysis.sweepDetected
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                  : "bg-zinc-100 text-zinc-600 border-zinc-200"
-              )}
-            >
-              {liquidityAnalysis.status}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3 text-xs">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100">
-                <span className="text-zinc-500 block">Buy-Side Liquidity (BSL)</span>
-                <span className="text-sm font-bold text-zinc-900 block mt-0.5">
-                  {liquidityAnalysis.bslLevel ? `$${formatPrice(liquidityAnalysis.bslLevel)}` : "-"}
-                </span>
-                <span className="text-[10px] text-zinc-400">Pool di atas swing high</span>
-              </div>
-
-              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100">
-                <span className="text-zinc-500 block">Sell-Side Liquidity (SSL)</span>
-                <span className="text-sm font-bold text-zinc-900 block mt-0.5">
-                  {liquidityAnalysis.sslLevel ? `$${formatPrice(liquidityAnalysis.sslLevel)}` : "-"}
-                </span>
-                <span className="text-[10px] text-zinc-400">Pool di bawah swing low</span>
-              </div>
-            </div>
-
-            <p className="text-zinc-600 leading-relaxed bg-zinc-50 p-3 rounded-lg border border-zinc-100">
-              {liquidityAnalysis.reason}
-            </p>
-          </div>
-        </div>
-
-        {/* DATA QUALITY & FEED STATUS */}
-        <div id="data-quality-panel" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-blue-500" />
-              <h3 className="font-bold text-zinc-900 text-sm">Kualitas Data & Aliran Feed</h3>
-            </div>
-            <span
-              className={cn(
-                "px-2.5 py-0.5 rounded text-xs font-semibold border",
-                dataQuality.isFresh
-                  ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                  : "bg-rose-50 text-rose-700 border-rose-200"
-              )}
-            >
-              {dataQuality.freshnessStatus}
-            </span>
-          </div>
-
-          <div className="mt-4 space-y-3 text-xs">
-            {/* Feed source and status info */}
-            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 space-y-1.5">
-              <div className="flex items-center justify-between">
-                <span className="text-zinc-500">Jalur Feed Utama:</span>
-                <span className="font-bold text-zinc-900">
-                  {dataSource === "twelvedata"
-                    ? "Twelve Data API (Live)"
-                    : dataSource === "cache"
-                    ? "Twelve Data (Cache Firestore)"
-                    : dataSource === "tradingview"
-                    ? "TradingView Webhook (Fallback)"
-                    : "Belum Terhubung"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-zinc-400">Status Pasar:</span>
-                <span
-                  className={cn(
-                    "font-semibold",
-                    marketStatus?.isOpen ? "text-emerald-700" : "text-amber-700"
-                  )}
-                >
-                  {marketStatus?.isOpen ? "Buka (Aktif)" : "Tutup (Akhir Pekan/Rollover)"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-zinc-400">Penggunaan Kuota API:</span>
-                <span className="font-mono text-zinc-700">
-                  {quotaStatus ? `${quotaStatus.estimatedUsedToday} / ${quotaStatus.maxDailyLimit || 800} req/hari` : "-"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-zinc-400">Sinkronisasi Terakhir:</span>
-                <span className="text-zinc-600 font-mono">
-                  {lastApiFetchTimestamp ? new Date(lastApiFetchTimestamp).toLocaleTimeString("id-ID") : "-"}
-                </span>
-              </div>
-              {apiMessage && (
-                <div className="text-[10px] text-zinc-500 pt-1 border-t border-zinc-200/50 leading-relaxed">
-                  {apiMessage}
-                </div>
-              )}
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-100">
-                <span className="text-zinc-400 block text-[11px]">Feed H1</span>
-                <span className={cn("font-bold block mt-0.5", snapshots.H1 ? "text-emerald-600" : "text-zinc-400")}>
-                  {snapshots.H1 ? (timeframesFeed?.H1?.source === "twelve_data" ? "API Live" : "Cache") : "Belum Ada"}
-                </span>
-                <span className="text-[10px] text-zinc-400">{h1Candles.length} candle</span>
-              </div>
-
-              <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-100">
-                <span className="text-zinc-400 block text-[11px]">Feed M15</span>
-                <span className={cn("font-bold block mt-0.5", snapshots.M15 ? "text-emerald-600" : "text-zinc-400")}>
-                  {snapshots.M15 ? (timeframesFeed?.M15?.source === "twelve_data" ? "API Live" : "Cache") : "Belum Ada"}
-                </span>
-                <span className="text-[10px] text-zinc-400">{m15Candles.length} candle</span>
-              </div>
-
-              <div className="p-2.5 bg-zinc-50 rounded-lg border border-zinc-100">
-                <span className="text-zinc-400 block text-[11px]">Feed M5</span>
-                <span className={cn("font-bold block mt-0.5", snapshots.M5 ? "text-emerald-600" : "text-zinc-400")}>
-                  {snapshots.M5 ? (timeframesFeed?.M5?.source === "twelve_data" ? "API Live" : "Cache") : "Belum Ada"}
-                </span>
-                <span className="text-[10px] text-zinc-400">{m5Candles.length} candle</span>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between text-zinc-600 pt-1">
-              <span>Status Izin Analisis:</span>
-              <span className={cn("font-bold", dataQuality.analysisAllowed ? "text-emerald-600" : "text-rose-600")}>
-                {dataQuality.analysisAllowed ? "Diizinkan (Data Valid)" : "Ditangguhkan"}
-              </span>
-            </div>
-
-            <p className="text-zinc-500 text-[11px] leading-relaxed">
-              {dataQuality.reason}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* 6. CONFLUENCE CHECKLIST (10 POINTS) & RISK ENGINE ROW */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* CHECKLIST (2 COLS) */}
-        <div id="confluence-checklist-panel" className="lg:col-span-2 bg-white border border-zinc-200 rounded-xl p-5 shadow-xs">
-          <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-            <div className="flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <h3 className="font-bold text-zinc-900 text-sm">Matriks Konfluensi 10 Poin</h3>
-            </div>
-            <span className="text-xs text-zinc-500">
-              {checklist.filter((c) => c.status === "passed").length} dari 10 Terpenuhi
-            </span>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            {checklist.map((item) => {
-              return (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "p-3 rounded-lg border flex items-start gap-2.5 transition-colors",
-                    item.status === "passed"
-                      ? "bg-emerald-50/50 border-emerald-200 text-zinc-900"
-                      : item.status === "waiting"
-                      ? "bg-amber-50/30 border-amber-200 text-zinc-800"
-                      : "bg-rose-50/30 border-rose-200 text-zinc-800"
-                  )}
-                >
-                  <div className="mt-0.5 shrink-0">
-                    {item.status === "passed" ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    ) : item.status === "waiting" ? (
-                      <Clock className="w-4 h-4 text-amber-500" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 text-rose-500" />
-                    )}
-                  </div>
-                  <div className="space-y-0.5">
-                    <div className="flex items-center gap-1.5 font-semibold text-zinc-900">
-                      <span>{item.label}</span>
-                    </div>
-                    <p className="text-[11px] text-zinc-500 leading-snug">
-                      {item.detail}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* RISK ENGINE STATUS (1 COL) */}
-        <div id="risk-engine-panel" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-100">
-              <div className="flex items-center gap-2">
-                <Shield className="w-4 h-4 text-indigo-600" />
-                <h3 className="font-bold text-zinc-900 text-sm">Status Risiko Portofolio</h3>
-              </div>
-              <span
+            return (
+              <div
+                key={item.id}
                 className={cn(
-                  "px-2 py-0.5 rounded text-xs font-bold border",
-                  riskAnalysis.status === "Aman"
-                    ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                    : riskAnalysis.status === "Waspada"
-                    ? "bg-amber-50 text-amber-700 border-amber-200"
-                    : "bg-rose-50 text-rose-700 border-rose-200"
+                  "p-3 rounded-lg border flex items-start gap-2.5 transition-colors",
+                  isPassed
+                    ? "bg-emerald-50/40 border-emerald-200 text-zinc-900"
+                    : isWaiting
+                    ? "bg-amber-50/30 border-amber-200 text-zinc-800"
+                    : "bg-rose-50/30 border-rose-200 text-zinc-800"
                 )}
               >
-                {riskAnalysis.status}
-              </span>
-            </div>
-
-            <div className="mt-4 space-y-3 text-xs">
-              <div className="flex justify-between py-1 border-b border-zinc-50">
-                <span className="text-zinc-500">Kerugian Hari Ini:</span>
-                <span className="font-semibold text-zinc-900">
-                  Rp {todayRiskStats.dailyLossSoFar.toLocaleString("id-ID")}
-                </span>
+                <div className="mt-0.5 shrink-0">
+                  {isPassed ? (
+                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-emerald-600 text-white font-bold text-[10px]">
+                      ✓
+                    </span>
+                  ) : isWaiting ? (
+                    <Clock className="w-4 h-4 text-amber-500" />
+                  ) : (
+                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-rose-500 text-white font-bold text-[10px]">
+                      ✕
+                    </span>
+                  )}
+                </div>
+                <div className="space-y-0.5 min-w-0">
+                  <div className="flex items-center gap-1.5 font-semibold text-zinc-900">
+                    <span>{item.label}</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-500 truncate" title={item.detail}>
+                    {item.detail}
+                  </p>
+                </div>
               </div>
+            );
+          })}
+        </div>
 
-              <div className="flex justify-between py-1 border-b border-zinc-50">
-                <span className="text-zinc-500">Batas Kerugian Harian:</span>
-                <span className="font-semibold text-zinc-900">
-                  Rp {todayRiskStats.dailyLossLimit.toLocaleString("id-ID")}
-                </span>
-              </div>
-
-              <div className="flex justify-between py-1 border-b border-zinc-50">
-                <span className="text-zinc-500">Loss Beruntun Terkini:</span>
-                <span className="font-semibold text-zinc-900">
-                  {todayRiskStats.consecutiveLossesSoFar} dari maks {todayRiskStats.stopAfterLosses}x
-                </span>
-              </div>
-
-              <div className="flex justify-between py-1 border-b border-zinc-50">
-                <span className="text-zinc-500">Jumlah Trade Hari Ini:</span>
-                <span className="font-semibold text-zinc-900">
-                  {todayRiskStats.tradesToday} dari kuota {todayRiskStats.maxTradesPerDay}
-                </span>
-              </div>
-
-              <div className="p-2.5 bg-zinc-50 rounded-lg text-zinc-600 border border-zinc-100 text-[11px] leading-relaxed">
-                {riskAnalysis.reasons.join(" ")}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 pt-3 border-t border-zinc-100 text-[11px] text-zinc-400">
-            Terhubung otomatis dengan profil pengaturan akun <strong>{accountMode}</strong>.
+        {/* Highlighted Conclusion Box */}
+        <div className="mt-2 p-3 bg-zinc-50 rounded-lg border border-zinc-200 text-xs text-zinc-700 flex items-start gap-2">
+          <Zap className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-bold text-zinc-900 mr-1.5">Kesimpulan:</span>
+            <span>
+              {isBuySetupValid || isSellSetupValid
+                ? `Setup ${executionPlan?.direction} valid terkonfirmasi. Struktur M5 telah retest level kunci. Cek chart TradingView sebelum eksekusi.`
+                : isWaitBuy || isWaitSell
+                ? decision.reasons[0] || "Tunggu retest sebelum mempertimbangkan entry."
+                : decision.reasons[0] || "Kondisi pasar saat ini tidak memenuhi standar setup institusional. Disiplin menunggu."}
+            </span>
           </div>
         </div>
       </div>
 
-      {/* 7. INVALIDATION / WHAT CHANGES THE BIAS */}
-      <div id="invalidation-section" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs">
-        <div className="flex items-center gap-2 pb-3 border-b border-zinc-100">
-          <AlertCircle className="w-4 h-4 text-zinc-600" />
-          <h3 className="font-bold text-zinc-900 text-sm">Invalidasi & Batas Perubahan Bias</h3>
-        </div>
-
-        <div className="mt-3 text-xs text-zinc-700 leading-relaxed space-y-2">
-          <p>{decision.invalidationText}</p>
-          <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200/80 font-mono text-[11px] text-zinc-600">
-            Aturan Disiplin: Jangan pernah memaksakan eksekusi sebelum candle M5 ditutup dan mengonfirmasi retest level struktur.
-          </div>
-        </div>
-      </div>
-
-      {/* 8. INSTITUTIONAL EXECUTION PLAN (SHOWN ONLY WHEN VALID_SETUP) */}
-      {executionPlan && (
-        <div id="execution-plan-panel" className="bg-emerald-50/40 border-2 border-emerald-300 rounded-xl p-6 shadow-sm space-y-5">
+      {/* 5. EXECUTION PLAN (SHOWN ONLY WHEN SETUP IS VALID) */}
+      {(isBuySetupValid || isSellSetupValid) && executionPlan && (
+        <div id="execution-plan-panel" className="bg-emerald-50/50 border-2 border-emerald-400 rounded-xl p-6 shadow-sm space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-4 border-b border-emerald-200">
             <div>
-              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider">
-                Konfluensi Lengkap Terverifikasi
+              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">
+                Setup Terkonfirmasi Valid
               </span>
               <h3 className="text-xl font-black text-emerald-950 mt-0.5">
                 Rencana Eksekusi: {executionPlan.direction} XAUUSD
@@ -1346,7 +1454,7 @@ export function AiTradingDesk() {
               className="px-4 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg font-bold text-xs flex items-center gap-2 transition-all shadow-xs shrink-0 disabled:opacity-50"
             >
               <BookmarkPlus className="w-4 h-4" />
-              {isSavingPlan ? "Menyimpan Rencana..." : "Catat sebagai Rencana Trade"}
+              {isSavingPlan ? "Menyimpan..." : "Catat sebagai Rencana Trade"}
               <ArrowRight className="w-4 h-4" />
             </button>
           </div>
@@ -1357,90 +1465,214 @@ export function AiTradingDesk() {
             </div>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
-            <div className="p-3 bg-white rounded-lg border border-emerald-200">
-              <span className="text-zinc-500 block">Zona Entry Disarankan</span>
-              <span className="text-sm font-bold text-emerald-900 block mt-0.5">
-                {executionPlan.entryZone}
+          {/* Key Trade Parameters - Mandatory Hard Gates */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+            <div className="p-3 bg-white rounded-lg border border-emerald-200 shadow-2xs">
+              <span className="text-zinc-500 block text-[11px]">Area Entry Valid (Disarankan)</span>
+              <span className="text-sm font-bold text-emerald-900 block mt-0.5 font-mono">
+                ${formatPrice(executionPlan.entryLow)} – ${formatPrice(executionPlan.entryHigh)}
+              </span>
+              <span className="text-[10px] text-zinc-400 block mt-0.5 font-mono">
+                Ref: ${formatPrice(executionPlan.referenceEntry)}
               </span>
             </div>
 
-            <div className="p-3 bg-white rounded-lg border border-emerald-200">
-              <span className="text-zinc-500 block">Stop Loss (SL Ref)</span>
-              <span className="text-sm font-bold text-rose-700 block mt-0.5">
-                ${formatPrice(executionPlan.stopLossRef)}
+            <div className="p-3 bg-white rounded-lg border border-emerald-200 shadow-2xs">
+              <span className="text-zinc-500 block text-[11px]">Stop Loss Struktural (SL)</span>
+              <span className="text-sm font-bold text-rose-700 block mt-0.5 font-mono">
+                ${formatPrice(executionPlan.stopLoss)}
+              </span>
+              <span className="text-[10px] text-zinc-400 block mt-0.5">
+                Swing {executionPlan.direction === "BUY" ? "Low" : "High"} M5
               </span>
             </div>
 
-            <div className="p-3 bg-white rounded-lg border border-emerald-200">
-              <span className="text-zinc-500 block">Take Profit (TP Ref)</span>
-              <span className="text-sm font-bold text-emerald-700 block mt-0.5">
-                ${formatPrice(executionPlan.takeProfitRef)}
+            <div className="p-3 bg-white rounded-lg border border-emerald-200 shadow-2xs">
+              <span className="text-zinc-500 block text-[11px]">Target TP1 / TP2</span>
+              <span className="text-sm font-bold text-emerald-700 block mt-0.5 font-mono">
+                ${formatPrice(executionPlan.tp1)} {executionPlan.tp2 ? `/ $${formatPrice(executionPlan.tp2)}` : ""}
+              </span>
+              <span className="text-[10px] text-zinc-400 block mt-0.5">
+                Likuiditas Terdekat
               </span>
             </div>
 
-            <div className="p-3 bg-white rounded-lg border border-emerald-200">
-              <span className="text-zinc-500 block">Estimasi Risk/Reward</span>
-              <span className="text-sm font-bold text-zinc-900 block mt-0.5">
-                1 : {executionPlan.estimatedRR}
+            <div className="p-3 bg-white rounded-lg border border-emerald-200 shadow-2xs">
+              <span className="text-zinc-500 block text-[11px]">Risk / Reward Minimum (RR)</span>
+              <span className="text-sm font-bold text-zinc-900 block mt-0.5 font-mono">
+                1 : {executionPlan.rrToTp1}
+              </span>
+              <span className="text-[10px] text-emerald-600 font-semibold block mt-0.5">
+                {executionPlan.rrToTp2 ? `TP2: 1:${executionPlan.rrToTp2} • ` : ""}Lolos Hard Gate (&ge; 2.0)
               </span>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-zinc-700 bg-white/70 p-4 rounded-lg border border-emerald-200/80">
-            <div>
-              <span className="font-semibold text-zinc-900 block">Konteks & Lokasi:</span>
-              <span>{executionPlan.htfBias} • {executionPlan.m15Area}</span>
+          <div className="p-3.5 bg-white rounded-lg border border-emerald-200 text-xs space-y-2">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 text-zinc-600">
+              <span className="font-semibold text-zinc-800">Invalidasi Setup:</span>
+              <span className="font-medium text-rose-700">
+                ${formatPrice(executionPlan.invalidationLevel)} — {executionPlan.invalidationReason || executionPlan.invalidation}
+              </span>
             </div>
-            <div>
-              <span className="font-semibold text-zinc-900 block">Likuiditas & Retest:</span>
-              <span>{executionPlan.liquidityEvent} • {executionPlan.m5Confirmation}</span>
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 text-zinc-500 text-[11px] pt-1 border-t border-zinc-100">
+              <span>Waktu Setup: {formatTimestamp(executionPlan.setupCreatedAt)}</span>
+              <span className="font-semibold text-amber-800">
+                Kedaluwarsa Setup: {formatTimestamp(executionPlan.setupExpiresAt)} (3 candle M5 / 15 menit)
+              </span>
             </div>
           </div>
+
+          <p className="text-[11px] text-emerald-800 font-medium italic">
+            * Catatan Disiplin: Pastikan memeriksa visual chart di TradingView/LuxAlgo Anda sebelum melakukan klik eksekusi di akun Exness.
+          </p>
         </div>
       )}
 
-      {/* 9. RECENT EVALUATION HISTORY (FIRESTORE AUDIT TRAIL) */}
-      {recentAnalyses.length > 0 && (
-        <div id="recent-analyses-history" className="bg-white border border-zinc-200 rounded-xl p-5 shadow-xs space-y-3">
-          <div className="flex items-center justify-between pb-2 border-b border-zinc-100">
-            <h3 className="font-bold text-zinc-900 text-sm">Arsip Riwayat Evaluasi Mesin</h3>
-            <span className="text-xs text-zinc-400">Aturan: lootly-xauusd-v1</span>
+      {/* 6. COLLAPSIBLE TECHNICAL DETAILS & FEED INSPECTOR */}
+      <div id="technical-details-section" className="bg-white border border-zinc-200 rounded-xl overflow-hidden shadow-xs text-xs">
+        <button
+          onClick={() => setShowTechnicalDetails(!showTechnicalDetails)}
+          className="w-full p-4 flex items-center justify-between text-left hover:bg-zinc-50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-zinc-500" />
+            <span className="font-bold text-zinc-800 text-xs sm:text-sm">
+              Detail Teknis, Status Feed & Riwayat Evaluasi
+            </span>
           </div>
+          <div className="flex items-center gap-2 text-zinc-400 text-xs">
+            <span>{showTechnicalDetails ? "Sembunyikan" : "Tampilkan"}</span>
+            {showTechnicalDetails ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </div>
+        </button>
 
-          <div className="divide-y divide-zinc-100 text-xs">
-            {recentAnalyses.map((rec) => (
-              <div key={rec.id} className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "px-2 py-0.5 rounded text-[11px] font-bold border uppercase",
-                        rec.decision === SetupDecisionType.VALID_SETUP
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : rec.decision === SetupDecisionType.WAIT
-                          ? "bg-amber-50 text-amber-700 border-amber-200"
-                          : "bg-zinc-100 text-zinc-700 border-zinc-200"
-                      )}
-                    >
-                      {rec.decisionLabelIndo || rec.decision}
-                    </span>
-                    <span className="font-semibold text-zinc-800">{rec.symbol}</span>
-                    <span className="text-zinc-400">• Sesi {rec.session}</span>
-                  </div>
-                  <p className="text-zinc-500 text-[11px] line-clamp-1">
-                    {rec.reasons?.[0] || "Evaluasi konfluensi institusional"}
-                  </p>
-                </div>
-
-                <span className="text-[11px] text-zinc-400 whitespace-nowrap">
-                  {formatTimestamp(rec.timestamp)}
+        {showTechnicalDetails && (
+          <div className="p-5 pt-0 border-t border-zinc-100 space-y-5">
+            {/* Multi-Timeframe Status Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-4">
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+                <span className="font-bold text-zinc-900 block">Konteks H1</span>
+                <span className="text-[11px] text-zinc-500 block mt-0.5">
+                  Bias: {h1Analysis.bias} ({h1Analysis.structure})
+                </span>
+                <span className="text-[11px] text-zinc-400 block mt-1">
+                  Candle H1: {h1Candles.length} • Tutup: {snapshots.H1 ? `$${formatPrice(snapshots.H1.close)}` : "-"}
                 </span>
               </div>
-            ))}
+
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+                <span className="font-bold text-zinc-900 block">Lokasi M15</span>
+                <span className="text-[11px] text-zinc-500 block mt-0.5">
+                  Area: {m15Analysis.location} ({m15Analysis.pullbackStatus})
+                </span>
+                <span className="text-[11px] text-zinc-400 block mt-1">
+                  Candle M15: {m15Candles.length} • Tutup: {snapshots.M15 ? `$${formatPrice(snapshots.M15.close)}` : "-"}
+                </span>
+              </div>
+
+              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+                <span className="font-bold text-zinc-900 block">Konfirmasi M5</span>
+                <span className="text-[11px] text-zinc-500 block mt-0.5">
+                  CHoCH: {m5Analysis.chochDetected ? "Ya" : "Belum"} • Retest: {m5Analysis.retestStatus}
+                </span>
+                <span className="text-[11px] text-zinc-400 block mt-1">
+                  Candle M5: {m5Candles.length} • Tutup: {snapshots.M5 ? `$${formatPrice(snapshots.M5.close)}` : "-"}
+                </span>
+              </div>
+            </div>
+
+            {/* Quota & Market Status */}
+            <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-200 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-zinc-600">
+              <div>
+                <span className="text-zinc-400 block">Status Pasar XAUUSD:</span>
+                <span className="font-semibold text-zinc-800">
+                  {marketStatus?.isOpen ? "Buka (Aktif)" : "Tutup (Akhir Pekan/Rollover)"}
+                </span>
+              </div>
+              <div>
+                <span className="text-zinc-400 block">Penggunaan Kuota Twelve Data:</span>
+                <span className="font-semibold text-zinc-800 font-mono">
+                  {quotaStatus ? `${quotaStatus.estimatedUsedToday} / ${quotaStatus.maxDailyLimit || 800} req` : "-"}
+                </span>
+              </div>
+              <div>
+                <span className="text-zinc-400 block">Sumber Feed:</span>
+                <span className="font-semibold text-zinc-800">
+                  {dataSource === "twelvedata"
+                    ? "Twelve Data API (Live)"
+                    : dataSource === "cache"
+                    ? "Cache Firestore Server"
+                    : dataSource === "tradingview"
+                    ? "TradingView Webhook Fallback"
+                    : "Belum Ada"}
+                </span>
+              </div>
+            </div>
+
+            {/* TradingView Webhook Fallback Guide Toggle */}
+            <div className="pt-2">
+              <button
+                onClick={() => setShowGuide(!showGuide)}
+                className="text-xs font-semibold text-zinc-700 hover:text-zinc-900 flex items-center gap-1.5"
+              >
+                <Radio className="w-3.5 h-3.5 text-emerald-600" />
+                {showGuide ? "Sembunyikan Panduan Webhook Fallback" : "Buka Panduan Webhook Fallback TradingView"}
+              </button>
+
+              {showGuide && (
+                <div className="mt-3 p-4 bg-zinc-900 text-zinc-100 rounded-lg space-y-3 font-mono text-[11px]">
+                  <div>
+                    <label className="text-zinc-400 block mb-1">Endpoint Webhook:</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        readOnly
+                        value={webhookUrl}
+                        className="bg-zinc-950 border border-zinc-800 text-emerald-400 px-3 py-1.5 rounded w-full select-all text-xs"
+                      />
+                      <button
+                        onClick={() => copyToClipboard(webhookUrl, "url")}
+                        className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded font-sans text-xs shrink-0"
+                      >
+                        {copiedField === "url" ? "Disalin" : "Salin"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Audit Trail: Recent Analyses */}
+            {recentAnalyses.length > 0 && (
+              <div className="pt-2 border-t border-zinc-100 space-y-2">
+                <span className="font-bold text-zinc-800 block text-xs">Arsip Evaluasi Mesin AI</span>
+                <div className="divide-y divide-zinc-100">
+                  {recentAnalyses.map((rec) => (
+                    <div key={rec.id} className="py-2.5 flex items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold border bg-zinc-100 text-zinc-700">
+                            {rec.decisionLabelIndo || rec.decision}
+                          </span>
+                          <span className="font-semibold text-zinc-800">{rec.symbol}</span>
+                          <span className="text-zinc-400 text-[10px]">• Arah: {(rec as any).direction || rec.h1Context?.bias || "-"}</span>
+                        </div>
+                        <p className="text-zinc-500 text-[11px] line-clamp-1">
+                          {rec.reasons?.[0] || "Evaluasi konfluensi institusional"}
+                        </p>
+                      </div>
+                      <span className="text-[11px] text-zinc-400 shrink-0">
+                        {formatTimestamp(rec.timestamp || (rec as any).updatedAt)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

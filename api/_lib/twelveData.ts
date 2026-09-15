@@ -11,7 +11,7 @@ import {
   limit,
   Firestore,
 } from "firebase/firestore";
-import { serverFirebaseConfig } from "./firebaseConfig";
+import { serverFirebaseConfig } from "./firebaseConfig.js";
 import {
   SupportedDeskTimeframe,
   MarketSnapshot,
@@ -22,7 +22,7 @@ import {
   TimeframeFeedStatus,
   QuotaStatus,
   TradingDeskSession,
-} from "./types";
+} from "./types.js";
 
 // Named Firestore database ID
 const FIRESTORE_DATABASE_ID =

@@ -3,8 +3,15 @@ import path from "path";
 import dotenv from "dotenv";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
-import { processTradingViewWebhook } from "./src/lib/tradingviewWebhook";
-import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./api/_lib/twelveData";
+import { processTradingViewWebhook } from "./api/_lib/tradingviewWebhook.js";
+import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./api/_lib/twelveData.js";
+import {
+  getPublicVapidKey,
+  registerSubscription,
+  unregisterSubscription,
+  sendPushNotification,
+  getSubscriptionsForUser,
+} from "./api/_lib/pushService.js";
 
 dotenv.config();
 
@@ -76,6 +83,110 @@ app.post("/api/tradingview-webhook", async (req, res) => {
       success: false,
       error: "Internal server error processing TradingView webhook.",
     });
+  }
+});
+
+// ==============================================================================
+// WEB PUSH NOTIFICATION ENDPOINTS
+// ==============================================================================
+
+// 1. Get Public VAPID Key for client push registration
+app.get("/api/push/public-key", (_req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  return res.json({
+    success: true,
+    publicKey: getPublicVapidKey(),
+  });
+});
+
+// 2. Subscribe a browser client device for Web Push notifications
+app.post("/api/push/subscribe", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const { subscription, userId, deviceLabel } = req.body || {};
+    if (!subscription || !subscription.endpoint) {
+      return res.status(400).json({ success: false, error: "PushSubscription endpoint required." });
+    }
+    const result = registerSubscription({
+      endpoint: subscription.endpoint,
+      keys: subscription.keys,
+      userId,
+      deviceLabel,
+    });
+    return res.json({ success: true, totalActive: result.totalActive });
+  } catch (err: any) {
+    console.error("[Push Subscribe Express] Error:", err);
+    return res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 3. Unsubscribe a browser client device
+app.post("/api/push/unsubscribe", (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const { endpoint } = req.body || {};
+    if (!endpoint) {
+      return res.status(400).json({ success: false, error: "Subscription endpoint required." });
+    }
+    const result = unregisterSubscription(endpoint);
+    return res.json({ success: true, totalActive: result.totalActive });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 4. Send a Web Push notification to registered clients
+app.post("/api/push/send-alert", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const { payload, targetUserId } = req.body || {};
+    if (!payload || !payload.title || !payload.body) {
+      return res.status(400).json({ success: false, error: "Payload with title and body is required." });
+    }
+    const result = await sendPushNotification(payload, targetUserId);
+    return res.json({
+      success: true,
+      sent: result.sent,
+      failed: result.failed,
+      removed: result.removed,
+      skippedDuplicate: result.skippedDuplicate || false,
+    });
+  } catch (err: any) {
+    console.error("[Push Send Alert Express] Error:", err);
+    return res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
+// 5. Test push notification for user verification
+app.post("/api/push/test", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  try {
+    const { targetUserId } = req.body || {};
+    const subs = getSubscriptionsForUser(targetUserId);
+    if (subs.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Tidak ada perangkat yang terdaftar untuk push notifikasi pada akun ini. Silakan aktifkan push notifikasi terlebih dahulu.",
+      });
+    }
+    const result = await sendPushNotification(
+      {
+        title: "Lootly — Uji Coba Push Notifikasi",
+        body: "Push notifikasi latar belakang berhasil terhubung! Anda akan menerima alert saat setup XAU/USD valid terbentuk.",
+        tag: `lootly-test-${Date.now()}`,
+        data: { url: "/ai-desk", type: "TEST" },
+      },
+      targetUserId
+    );
+    return res.json({
+      success: true,
+      message: "Tes notifikasi berhasil dikirim.",
+      sent: result.sent,
+      failed: result.failed,
+    });
+  } catch (err: any) {
+    console.error("[Push Test Express] Error:", err);
+    return res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 });
 

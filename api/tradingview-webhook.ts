@@ -1,4 +1,4 @@
-import { processTradingViewWebhook } from "../src/lib/tradingviewWebhook";
+import { processTradingViewWebhook } from "./_lib/tradingviewWebhook.js";
 
 // Vercel serverless function max execution time
 export const maxDuration = 30;

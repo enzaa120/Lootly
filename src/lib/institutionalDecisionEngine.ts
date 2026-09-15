@@ -803,6 +803,7 @@ export function evaluateSession(
  * - Daily loss limit
  * - Consecutive loss limit
  * - Max trades per day
+ * Returns riskFilter: "AMAN" | "PERINGATAN" | "DIBLOKIR"
  */
 export function evaluateRisk(
   settings: {
@@ -827,7 +828,7 @@ export function evaluateRisk(
   if (dailyLimit > 0 && todayStats.dailyLossSoFar >= dailyLimit) {
     isBreached = true;
     reasons.push(
-      `Batas kerugian harian terlampaui (-$${todayStats.dailyLossSoFar.toFixed(2)} / limit $${dailyLimit.toFixed(2)}).`
+      `Batas kerugian harian terlampaui (-Rp ${todayStats.dailyLossSoFar.toLocaleString("id-ID")} / limit Rp ${dailyLimit.toLocaleString("id-ID")}).`
     );
   }
 
@@ -848,20 +849,26 @@ export function evaluateRisk(
   }
 
   let status: RiskAnalysisResult["status"] = "Aman";
+  let riskFilter: "AMAN" | "PERINGATAN" | "DIBLOKIR" = "AMAN";
+
   if (isBreached) {
     status = "Terlalu Berisiko";
+    riskFilter = "DIBLOKIR";
   } else if (
     (dailyLimit > 0 && todayStats.dailyLossSoFar >= dailyLimit * 0.7) ||
     (maxLosses > 0 && todayStats.consecutiveLossesSoFar >= maxLosses - 1)
   ) {
     status = "Waspada";
+    riskFilter = "PERINGATAN";
     reasons.push("Mendekati ambang batas toleransi risiko harian.");
   } else {
+    riskFilter = "AMAN";
     reasons.push("Parameter risiko portofolio dalam batas aman.");
   }
 
   return {
     status,
+    riskFilter,
     reasons,
     isBreached,
     dailyLossSoFar: todayStats.dailyLossSoFar,
@@ -870,9 +877,22 @@ export function evaluateRisk(
   };
 }
 
+export interface ExecutionPlanCalculationResult {
+  plan: ExecutionPlan | null;
+  isValid: boolean;
+  isExpired: boolean;
+  failureReason: string | null;
+}
+
 /**
  * 13. Risk / Reward & Execution Plan Calculation
- * Strictly derived only when a setup reaches VALID_SETUP.
+ * Mandatory HARD GATES:
+ * - Valid entry zone (entryLow, entryHigh, referenceEntry) from real M5 retest
+ * - Valid structural Stop Loss (below/above liquidity sweep or swing extreme + noise buffer)
+ * - Valid Take Profit (TP1 mandatory from opposing liquidity/structure, TP2 optional)
+ * - Strict Minimum Risk/Reward (MIN_RR >= 2.0 to TP1)
+ * - Valid Invalidation level and reason
+ * - Setup expiry detection (overextended, partially played out, or invalidated)
  */
 export function calculateExecutionPlan(
   h1: H1AnalysisResult,
@@ -881,76 +901,313 @@ export function calculateExecutionPlan(
   m5: M5ConfirmationResult,
   currentPrice: number,
   sessionInfo: ReturnType<typeof evaluateSession>,
-  targetRR: number = 2.0
-): ExecutionPlan | null {
-  if (h1.bias === "Netral" || !m5.breakLevel) return null;
+  targetRR: number = 2.0,
+  dataFreshnessText: string = "Realtime"
+): ExecutionPlanCalculationResult {
+  if (h1.bias === "Netral" || !m5.breakLevel) {
+    return {
+      plan: null,
+      isValid: false,
+      isExpired: false,
+      failureReason: "Level konfirmasi M5 (breakLevel) atau bias H1 belum valid.",
+    };
+  }
 
   const direction: "BUY" | "SELL" = h1.bias === "Bullish" ? "BUY" : "SELL";
+  const minRR = Math.max(2.0, targetRR);
+  const now = Date.now();
+  const setupCreatedAt = now;
+  const setupExpiresAt = now + 45 * 60 * 1000; // 45-minute validity window (approx. 9 M5 candles)
+  const noiseBuffer = 1.20; // Structural volatility noise buffer for XAU/USD
 
   if (direction === "BUY") {
-    // Buy entry near the retested broken microHigh
-    const entryLow = Number((m5.breakLevel - 0.2).toFixed(2));
-    const entryHigh = Number((m5.breakLevel + 0.6).toFixed(2));
-    const entryZone = `$${entryLow} - $${entryHigh}`;
+    // 1. Entry zone from confirmed M5 level
+    const entryLow = Number((m5.breakLevel - 0.25).toFixed(2));
+    const entryHigh = Number((m5.breakLevel + 0.65).toFixed(2));
+    const referenceEntry = Number(((entryLow + entryHigh) / 2).toFixed(2));
+    const entryArea = `${entryLow.toFixed(2)} – ${entryHigh.toFixed(2)}`;
 
-    // Stop loss placed below the swept SSL or swing low with buffer
-    const refLow = liq.sweptPrice || (m15.rangeLow ? m15.rangeLow : m5.breakLevel - 3.0);
-    const stopLossRef = Number((refLow - 1.5).toFixed(2));
-    const riskDistance = Math.max(1.0, m5.breakLevel - stopLossRef);
+    // 2. Structural Stop Loss: below swept liquidity low or M15 range low
+    const structuralLow = liq.sweptPrice || m15.rangeLow || (h1.recentLow ? h1.recentLow : null);
+    if (!structuralLow || structuralLow >= entryLow) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Stop Loss struktural tidak valid (tidak ada swing low / swept liquidity di bawah entry).",
+      };
+    }
 
-    // Take profit based on planned RR targeting opposing BSL
-    const tpFromRR = Number((m5.breakLevel + riskDistance * targetRR).toFixed(2));
-    const takeProfitRef = liq.bslLevel && liq.bslLevel > m5.breakLevel ? Math.max(tpFromRR, liq.bslLevel) : tpFromRR;
-    const actualRR = Number(((takeProfitRef - m5.breakLevel) / riskDistance).toFixed(2));
+    const stopLoss = Number((structuralLow - noiseBuffer).toFixed(2));
+    const riskDistance = Number((referenceEntry - stopLoss).toFixed(2));
 
-    return {
+    if (riskDistance < 1.0) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Jarak Stop Loss terlalu dekat dengan noise pasar (< 1.0 poin).",
+      };
+    }
+
+    // 3. Take Profit Targets (Opposing BSL or swing high)
+    const rawTargets = [liq.bslLevel, m15.rangeHigh, h1.recentHigh].filter(
+      (lvl): lvl is number => typeof lvl === "number" && lvl > referenceEntry + 1.0
+    );
+    const uniqueSortedTargets = Array.from(new Set(rawTargets)).sort((a, b) => a - b);
+
+    if (uniqueSortedTargets.length === 0) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Tidak ada target struktural (opposing liquidity / swing high) di atas entry.",
+      };
+    }
+
+    // TP1 is the primary structural objective
+    const tp1 = Number(uniqueSortedTargets[0].toFixed(2));
+    const tp2 = uniqueSortedTargets.length > 1 ? Number(uniqueSortedTargets[uniqueSortedTargets.length - 1].toFixed(2)) : null;
+
+    const rewardDistance = Number((tp1 - referenceEntry).toFixed(2));
+    const rrToTp1 = Number((rewardDistance / riskDistance).toFixed(2));
+    const rrToTp2 = tp2 ? Number(((tp2 - referenceEntry) / riskDistance).toFixed(2)) : null;
+
+    const invalidationLevel = stopLoss;
+    const invalidationReason = `Close candle di bawah $${stopLoss.toFixed(2)}`;
+
+    const plan: ExecutionPlan = {
       direction: "BUY",
+      entryLow,
+      entryHigh,
+      referenceEntry,
+      stopLoss,
+      tp1,
+      tp2,
+      rrToTp1,
+      rrToTp2,
+      invalidationLevel,
+      invalidationReason,
+      setupCreatedAt,
+      setupExpiresAt,
+      marketPriceAtSignal: currentPrice,
+      // Compatibility references
+      entryArea,
+      entryZone: `$${entryArea}`,
+      stopLossRef: stopLoss,
+      takeProfitRef: tp1,
+      estimatedRR: rrToTp1,
+      rr: rrToTp1,
+      invalidation: invalidationReason,
+      timestamp: now,
+      dataFreshness: dataFreshnessText,
       htfBias: "Bullish (H1 Higher Highs & Higher Lows)",
       m15Area: `${m15.zoneType} ($${m15.rangeLow?.toFixed(2)} - $${m15.equilibrium?.toFixed(2)})`,
       liquidityEvent: liq.status,
       m5Confirmation: m5.status,
-      entryZone,
-      stopLossRef,
-      takeProfitRef,
-      estimatedRR: actualRR,
-      invalidationLevel: stopLossRef,
       sessionNote: sessionInfo.sessionLabel,
       riskStatus: "Sesuai parameter portofolio",
     };
-  } else {
-    // Sell entry near the retested broken microLow
-    const entryLow = Number((m5.breakLevel - 0.6).toFixed(2));
-    const entryHigh = Number((m5.breakLevel + 0.2).toFixed(2));
-    const entryZone = `$${entryLow} - $${entryHigh}`;
 
-    const refHigh = liq.sweptPrice || (m15.rangeHigh ? m15.rangeHigh : m5.breakLevel + 3.0);
-    const stopLossRef = Number((refHigh + 1.5).toFixed(2));
-    const riskDistance = Math.max(1.0, stopLossRef - m5.breakLevel);
+    // 4. Expiry Checks
+    if (currentPrice > 0) {
+      // Invalidation occurred: price traded below Stop Loss
+      if (currentPrice < stopLoss) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: `Setup gugur. Harga ($${currentPrice.toFixed(2)}) menembus level invalidasi $${stopLoss.toFixed(2)}.`,
+        };
+      }
+      // Target partially played out before entry (reached 45%+ of TP1 distance)
+      if (currentPrice >= referenceEntry + rewardDistance * 0.45) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: "Setup sudah terlewat. Target sudah berjalan sebagian sebelum entry tercapai. Jangan kejar harga.",
+        };
+      }
+      // Price moved materially away from entry zone
+      if (currentPrice > entryHigh + 2.0) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: "Setup sudah terlewat. Harga telah bergerak menjauhi area entry. Jangan kejar harga.",
+        };
+      }
+    }
 
-    const tpFromRR = Number((m5.breakLevel - riskDistance * targetRR).toFixed(2));
-    const takeProfitRef = liq.sslLevel && liq.sslLevel < m5.breakLevel ? Math.min(tpFromRR, liq.sslLevel) : tpFromRR;
-    const actualRR = Number(((m5.breakLevel - takeProfitRef) / riskDistance).toFixed(2));
+    // 5. Minimum Risk/Reward Hard Gate
+    if (rrToTp1 < minRR) {
+      return {
+        plan,
+        isValid: false,
+        isExpired: false,
+        failureReason: `Ruang menuju target belum cukup untuk memenuhi Risk/Reward minimum (RR 1:${rrToTp1.toFixed(1)} < min 1:${minRR.toFixed(1)}).`,
+      };
+    }
 
     return {
+      plan,
+      isValid: true,
+      isExpired: false,
+      failureReason: null,
+    };
+  } else {
+    // SELL DIRECTION
+    // 1. Entry zone from confirmed M5 level
+    const entryLow = Number((m5.breakLevel - 0.65).toFixed(2));
+    const entryHigh = Number((m5.breakLevel + 0.25).toFixed(2));
+    const referenceEntry = Number(((entryLow + entryHigh) / 2).toFixed(2));
+    const entryArea = `${entryLow.toFixed(2)} – ${entryHigh.toFixed(2)}`;
+
+    // 2. Structural Stop Loss: above swept liquidity high or M15 range high
+    const structuralHigh = liq.sweptPrice || m15.rangeHigh || (h1.recentHigh ? h1.recentHigh : null);
+    if (!structuralHigh || structuralHigh <= entryHigh) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Stop Loss struktural tidak valid (tidak ada swing high / swept liquidity di atas entry).",
+      };
+    }
+
+    const stopLoss = Number((structuralHigh + noiseBuffer).toFixed(2));
+    const riskDistance = Number((stopLoss - referenceEntry).toFixed(2));
+
+    if (riskDistance < 1.0) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Jarak Stop Loss terlalu dekat dengan noise pasar (< 1.0 poin).",
+      };
+    }
+
+    // 3. Take Profit Targets (Opposing SSL or swing low)
+    const rawTargets = [liq.sslLevel, m15.rangeLow, h1.recentLow].filter(
+      (lvl): lvl is number => typeof lvl === "number" && lvl < referenceEntry - 1.0
+    );
+    const uniqueSortedTargets = Array.from(new Set(rawTargets)).sort((a, b) => b - a); // descending for sell
+
+    if (uniqueSortedTargets.length === 0) {
+      return {
+        plan: null,
+        isValid: false,
+        isExpired: false,
+        failureReason: "Tidak ada target struktural (opposing liquidity / swing low) di bawah entry.",
+      };
+    }
+
+    const tp1 = Number(uniqueSortedTargets[0].toFixed(2));
+    const tp2 = uniqueSortedTargets.length > 1 ? Number(uniqueSortedTargets[uniqueSortedTargets.length - 1].toFixed(2)) : null;
+
+    const rewardDistance = Number((referenceEntry - tp1).toFixed(2));
+    const rrToTp1 = Number((rewardDistance / riskDistance).toFixed(2));
+    const rrToTp2 = tp2 ? Number(((referenceEntry - tp2) / riskDistance).toFixed(2)) : null;
+
+    const invalidationLevel = stopLoss;
+    const invalidationReason = `Close candle di atas $${stopLoss.toFixed(2)}`;
+
+    const plan: ExecutionPlan = {
       direction: "SELL",
+      entryLow,
+      entryHigh,
+      referenceEntry,
+      stopLoss,
+      tp1,
+      tp2,
+      rrToTp1,
+      rrToTp2,
+      invalidationLevel,
+      invalidationReason,
+      setupCreatedAt,
+      setupExpiresAt,
+      marketPriceAtSignal: currentPrice,
+      // Compatibility references
+      entryArea,
+      entryZone: `$${entryArea}`,
+      stopLossRef: stopLoss,
+      takeProfitRef: tp1,
+      estimatedRR: rrToTp1,
+      rr: rrToTp1,
+      invalidation: invalidationReason,
+      timestamp: now,
+      dataFreshness: dataFreshnessText,
       htfBias: "Bearish (H1 Lower Highs & Lower Lows)",
       m15Area: `${m15.zoneType} ($${m15.equilibrium?.toFixed(2)} - $${m15.rangeHigh?.toFixed(2)})`,
       liquidityEvent: liq.status,
       m5Confirmation: m5.status,
-      entryZone,
-      stopLossRef,
-      takeProfitRef,
-      estimatedRR: actualRR,
-      invalidationLevel: stopLossRef,
       sessionNote: sessionInfo.sessionLabel,
       riskStatus: "Sesuai parameter portofolio",
+    };
+
+    // 4. Expiry Checks
+    if (currentPrice > 0) {
+      // Invalidation occurred: price traded above Stop Loss
+      if (currentPrice > stopLoss) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: `Setup gugur. Harga ($${currentPrice.toFixed(2)}) menembus level invalidasi $${stopLoss.toFixed(2)}.`,
+        };
+      }
+      // Target partially played out before entry (reached 45%+ of TP1 distance)
+      if (currentPrice <= referenceEntry - rewardDistance * 0.45) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: "Setup sudah terlewat. Target sudah berjalan sebagian sebelum entry tercapai. Jangan kejar harga.",
+        };
+      }
+      // Price moved materially away from entry zone
+      if (currentPrice < entryLow - 2.0) {
+        return {
+          plan,
+          isValid: false,
+          isExpired: true,
+          failureReason: "Setup sudah terlewat. Harga telah bergerak menjauhi area entry. Jangan kejar harga.",
+        };
+      }
+    }
+
+    // 5. Minimum Risk/Reward Hard Gate
+    if (rrToTp1 < minRR) {
+      return {
+        plan,
+        isValid: false,
+        isExpired: false,
+        failureReason: `Ruang menuju target belum cukup untuk memenuhi Risk/Reward minimum (RR 1:${rrToTp1.toFixed(1)} < min 1:${minRR.toFixed(1)}).`,
+      };
+    }
+
+    return {
+      plan,
+      isValid: true,
+      isExpired: false,
+      failureReason: null,
     };
   }
 }
 
 /**
- * 14 & 16. Institutional Confluence Checklist & Decision Matrix
- * Pure deterministic rule engine that evaluates strictly without shortcuts.
+ * 14. Setup Checklist & Final Decision Engine
+ * Deterministic rule engine for Lootly setup validation:
+ * H1 -> M15 -> Liquidity -> M5 CHoCH/MSS -> Displacement -> Retest -> Risk -> Hard Gates (SL, TP, RR, Expiry)
+ *
+ * Decisions:
+ * BUY_SETUP_VALID  -> SETUP BUY VALID
+ * SELL_SETUP_VALID -> SETUP SELL VALID
+ * WAIT_BUY         -> TUNGGU BUY
+ * WAIT_SELL        -> TUNGGU SELL
+ * NO_TRADE         -> TIDAK ADA TRADE
+ * SETUP_EXPIRED    -> SETUP KEDALUWARSA
+ * SETUP_FORMING    -> SETUP TERBENTUK (Pre-alert)
  */
 export function evaluateInstitutionalConfluence(
   dataQuality: DataQualityStatus,
@@ -967,79 +1224,109 @@ export function evaluateInstitutionalConfluence(
   checklist: ConfluenceChecklistItem[];
   executionPlan: ExecutionPlan | null;
 } {
-  // Build 10-point Confluence Checklist
+  const isBullishDirection = h1.bias === "Bullish";
+  const isBearishDirection = h1.bias === "Bearish";
+
+  // Build 7-point Compact Checklist adapted dynamically to direction
   const checklist: ConfluenceChecklistItem[] = [
+    // 1. H1 Bias
     {
       id: "h1_bias",
-      label: "H1 bias jelas",
+      label: "H1 Bias",
       status:
         !dataQuality.analysisAllowed || h1.candleCount < MIN_CANDLES_H1
           ? "waiting"
           : h1.bias !== "Netral"
           ? "passed"
           : "failed",
-      detail: h1.bias !== "Netral" ? `${h1.bias} (${h1.structure})` : "Struktur H1 masih netral / ranging",
+      detail:
+        h1.bias === "Bullish"
+          ? "Bullish (struktur HH/HL)"
+          : h1.bias === "Bearish"
+          ? "Bearish (struktur LH/LL)"
+          : "Netral / Ranging (tanpa arah dominan)",
     },
+    // 2. M15 Pullback
     {
-      id: "m15_zone",
-      label: "M15 berada di area valid",
+      id: "m15_pullback",
+      label: "M15 Pullback",
       status:
         !dataQuality.analysisAllowed || m15.candleCount < MIN_CANDLES_M15
           ? "waiting"
-          : m15.matchesH1Bias
-          ? "passed"
-          : "waiting",
-      detail: m15.matchesH1Bias ? `${m15.location}` : `Belum di area ideal (${m15.location})`,
-    },
-    {
-      id: "m15_pullback",
-      label: "Pullback valid",
-      status:
-        m15.pullbackStatus === "Pullback Valid"
+          : m15.matchesH1Bias && m15.pullbackStatus === "Pullback Valid"
           ? "passed"
           : m15.pullbackStatus === "Overextended"
           ? "failed"
           : "waiting",
       detail:
-        m15.pullbackStatus === "Pullback Valid"
-          ? m15.isFirstTouch
-            ? "Pullback teramati (sentuhan pertama / first-touch)"
-            : "Pullback terkonfirmasi di zona"
-          : m15.pullbackStatus === "Overextended"
-          ? "Harga overextended (jangan kejar harga)"
-          : "Menunggu pembentukan pullback",
+        isBullishDirection
+          ? m15.matchesH1Bias
+            ? "Valid di area Diskon"
+            : `Belum di area diskon (${m15.location})`
+          : isBearishDirection
+          ? m15.matchesH1Bias
+            ? "Valid di area Premium"
+            : `Belum di area premium (${m15.location})`
+          : "Menunggu pembentukan pullback di zona kunci",
     },
+    // 3. Liquidity Sweep (BSL / SSL)
     {
       id: "liquidity_sweep",
-      label: "Liquidity sweep terkonfirmasi",
+      label: isBullishDirection
+        ? "Sellside Liquidity (SSL)"
+        : isBearishDirection
+        ? "Buyside Liquidity (BSL)"
+        : "Liquidity Sweep",
       status:
-        (h1.bias === "Bullish" && liq.status === "Likuiditas bawah tersapu") ||
-        (h1.bias === "Bearish" && liq.status === "Likuiditas atas tersapu")
+        isBullishDirection && liq.status === "Likuiditas bawah tersapu"
+          ? "passed"
+          : isBearishDirection && liq.status === "Likuiditas atas tersapu"
           ? "passed"
           : liq.status === "Likuiditas belum tersapu"
           ? "waiting"
           : "failed",
-      detail: liq.status,
+      detail:
+        isBullishDirection
+          ? liq.status === "Likuiditas bawah tersapu"
+            ? "Tersapu (SSL swept & ditolak ke atas)"
+            : "Belum tersapu"
+          : isBearishDirection
+          ? liq.status === "Likuiditas atas tersapu"
+            ? "Tersapu (BSL swept & ditolak ke bawah)"
+            : "Belum tersapu"
+          : liq.status,
     },
+    // 4. M5 CHoCH/MSS
     {
       id: "m5_choch",
-      label: "M5 CHoCH/MSS valid",
-      status: m5.chochDetected ? "passed" : "waiting",
+      label: "M5 CHoCH/MSS",
+      status:
+        isBullishDirection
+          ? m5.chochDetected && m5.breakLevel !== null
+            ? "passed"
+            : "waiting"
+          : isBearishDirection
+          ? m5.chochDetected && m5.breakLevel !== null
+            ? "passed"
+            : "waiting"
+          : "waiting",
       detail: m5.chochDetected
-        ? `CHoCH di level $${m5.breakLevel?.toFixed(2)}`
-        : "Belum terbentuk pergeseran struktur mikro",
+        ? `Terkonfirmasi di $${m5.breakLevel?.toFixed(2)}`
+        : "Belum ada pergeseran struktur mikro",
     },
+    // 5. Displacement
     {
-      id: "m5_displacement",
-      label: "Displacement valid",
+      id: "displacement",
+      label: "Displacement",
       status: m5.displacementDetected ? "passed" : "waiting",
       detail: m5.displacementDetected
-        ? "Candle momentum solid terdeteksi"
-        : "Belum ada candle penembusan bertenaga",
+        ? "Terkonfirmasi (candle momentum solid)"
+        : "Belum terkonfirmasi",
     },
+    // 6. Retest
     {
-      id: "retest_valid",
-      label: "Retest valid",
+      id: "retest",
+      label: "Retest",
       status:
         m5.retestStatus === "Valid"
           ? "passed"
@@ -1048,167 +1335,246 @@ export function evaluateInstitutionalConfluence(
           : "waiting",
       detail:
         m5.retestStatus === "Valid"
-          ? "Retest struktur bertahan valid"
+          ? "Valid (level retest bertahan)"
           : m5.retestStatus === "Menunggu"
           ? "Menunggu retest level breakdown/out"
           : m5.retestStatus === "Gagal"
           ? "Retest gagal menahan harga"
-          : "Menunggu pembentukan retest",
+          : "Belum ada retest",
     },
+    // 7. Risk
     {
-      id: "risk_limit",
-      label: "Risk limit aman",
-      status: risk.isBreached ? "failed" : risk.status === "Waspada" ? "waiting" : "passed",
-      detail: risk.isBreached
-        ? "Batas risiko portofolio terlampaui"
-        : `${risk.status} (${risk.reasons[0] || "Parameter aman"})`,
-    },
-    {
-      id: "session_acceptable",
-      label: "Session acceptable",
-      status: sessionInfo.isNewsMode ? "failed" : sessionInfo.isPreferred ? "passed" : "waiting",
-      detail: sessionInfo.message,
-    },
-    {
-      id: "data_fresh",
-      label: "Data fresh",
-      status: dataQuality.analysisAllowed
-        ? "passed"
-        : dataQuality.isMarketClosed
-        ? "waiting"
-        : dataQuality.isFresh
-        ? "passed"
-        : "failed",
-      detail: dataQuality.reason,
+      id: "risk",
+      label: "Risk",
+      status:
+        risk.riskFilter === "DIBLOKIR"
+          ? "failed"
+          : risk.riskFilter === "PERINGATAN"
+          ? "waiting"
+          : "passed",
+      detail:
+        risk.riskFilter === "AMAN"
+          ? "Aman (parameter risiko portofolio normal)"
+          : risk.riskFilter === "PERINGATAN"
+          ? "Peringatan (mendekati batas toleransi)"
+          : "Diblokir (batas kerugian harian / loss stop tercapai)",
     },
   ];
 
-  // Count checklist results
+  // Count checklist pass/fail
   const passedCount = checklist.filter((item) => item.status === "passed").length;
   const failedCount = checklist.filter((item) => item.status === "failed").length;
 
-  // Determine Confidence Label
-  let confidence: ConfidenceLabel = "Rendah";
-  if (passedCount >= 9 && failedCount === 0) {
-    confidence = "Tinggi";
-  } else if (passedCount >= 6 && failedCount <= 1) {
+  // Confidence label: Kuat | Sedang | Lemah
+  let confidence: "Kuat" | "Sedang" | "Lemah" = "Lemah";
+  if (passedCount >= 6 && failedCount === 0) {
+    confidence = "Kuat";
+  } else if (passedCount >= 4 && failedCount <= 1) {
     confidence = "Sedang";
   } else {
-    confidence = "Rendah";
+    confidence = "Lemah";
   }
 
-  // Determine Decision
-  const criticalItemsPassed =
-    checklist.find((c) => c.id === "h1_bias")?.status === "passed" &&
-    checklist.find((c) => c.id === "m15_zone")?.status === "passed" &&
-    checklist.find((c) => c.id === "liquidity_sweep")?.status === "passed" &&
-    checklist.find((c) => c.id === "m5_choch")?.status === "passed" &&
-    checklist.find((c) => c.id === "m5_displacement")?.status === "passed" &&
-    checklist.find((c) => c.id === "retest_valid")?.status === "passed" &&
-    checklist.find((c) => c.id === "risk_limit")?.status === "passed" &&
-    checklist.find((c) => c.id === "data_fresh")?.status === "passed" &&
-    !sessionInfo.isNewsMode;
-
+  // Final Decision Determination
   let decisionType: SetupDecisionType = SetupDecisionType.NO_TRADE;
   let decisionLabelIndo: DecisionLabelIndo = "TIDAK ADA TRADE";
   const reasons: string[] = [];
 
-  // NO_TRADE conditions:
-  // 1. Stale or insufficient data / Market closed
-  // 2. Risk limit breached
-  // 3. High impact news mode
-  // 4. H1 context is neutral / ranging
-  // 5. Structure failure (retest failed)
-  if (!dataQuality.analysisAllowed) {
-    if (dataQuality.isMarketClosed) {
-      decisionType = SetupDecisionType.NO_TRADE;
-      decisionLabelIndo = "TIDAK ADA TRADE";
-      reasons.push(dataQuality.reason || "Pasar XAU/USD sedang tutup (akhir pekan).");
-    } else if (!dataQuality.isFresh) {
-      decisionType = SetupDecisionType.WAIT;
-      decisionLabelIndo = "TUNGGU";
-      reasons.push("Data pasar belum cukup segar untuk validasi setup.");
-    } else {
-      decisionType = SetupDecisionType.NO_TRADE;
-      decisionLabelIndo = "TIDAK ADA TRADE";
-      reasons.push(dataQuality.reason);
-    }
-  } else if (risk.isBreached) {
-    decisionType = SetupDecisionType.NO_TRADE;
-    decisionLabelIndo = "TIDAK ADA TRADE";
-    reasons.push(`Aturan proteksi modal aktif: ${risk.reasons.join(" ")}`);
-  } else if (sessionInfo.isNewsMode) {
-    decisionType = SetupDecisionType.NO_TRADE;
-    decisionLabelIndo = "TIDAK ADA TRADE";
-    reasons.push("Mode Berita Berdampak Tinggi aktif. Trading ditunda demi keamanan modal.");
-  } else if (h1.bias === "Netral") {
-    decisionType = SetupDecisionType.NO_TRADE;
-    decisionLabelIndo = "TIDAK ADA TRADE";
-    reasons.push("Tren makro H1 netral/ranging tanpa arah dominan. Sesuai trading plan: NO ENTRY saat tren tidak jelas.");
-  } else if (criticalItemsPassed) {
-    decisionType = SetupDecisionType.VALID_SETUP;
-    decisionLabelIndo = "SETUP VALID";
-    reasons.push(
-      `Seluruh matriks konfluensi institusional terpenuhi: Tren H1 (${h1.bias}), pullback M15 valid, likuiditas tersapu, M5 CHoCH + displacement terverifikasi, dan retest bertahan.`
-    );
-  } else {
-    // If context is promising (H1 clear, data fresh, risk intact) but waiting on M15/sweep/M5/retest
-    decisionType = SetupDecisionType.WAIT;
-    decisionLabelIndo = "TUNGGU";
+  const h1Pass = checklist.find((c) => c.id === "h1_bias")?.status === "passed";
+  const m15Pass = checklist.find((c) => c.id === "m15_pullback")?.status === "passed";
+  const liqPass = checklist.find((c) => c.id === "liquidity_sweep")?.status === "passed";
+  const chochPass = checklist.find((c) => c.id === "m5_choch")?.status === "passed";
+  const dispPass = checklist.find((c) => c.id === "displacement")?.status === "passed";
+  const retestPass = checklist.find((c) => c.id === "retest")?.status === "passed";
+  const riskBlocked = risk.riskFilter === "DIBLOKIR";
 
-    if (m15.isFirstTouch && m5.retestStatus !== "Valid") {
-      reasons.push("Harga berada pada sentuhan pertama (first touch). Menunggu konfirmasi sweep dan retest M5.");
+  // Pre-calculate execution plan whenever structural level is available
+  const planResult = calculateExecutionPlan(
+    h1,
+    m15,
+    liq,
+    m5,
+    currentPrice,
+    sessionInfo,
+    targetRR,
+    dataQuality.freshnessStatus
+  );
+
+  // Case 1: Market Closed
+  if (!dataQuality.analysisAllowed && dataQuality.isMarketClosed) {
+    decisionType = SetupDecisionType.NO_TRADE;
+    decisionLabelIndo = "TIDAK ADA TRADE";
+    reasons.push(dataQuality.reason || "Pasar XAU/USD sedang tutup (akhir pekan/rollover).");
+  }
+  // Case 2: Data Stale
+  else if (!dataQuality.analysisAllowed && !dataQuality.isFresh) {
+    decisionType = SetupDecisionType.NO_TRADE;
+    decisionLabelIndo = "TIDAK ADA TRADE";
+    reasons.push("Data pasar belum cukup segar untuk validasi setup.");
+  }
+  // Case 3: Risk Breached (DIBLOKIR)
+  else if (riskBlocked) {
+    decisionType = SetupDecisionType.NO_TRADE;
+    decisionLabelIndo = "TIDAK ADA TRADE";
+    reasons.push(`Filter risiko Lootly aktif (DIBLOKIR): ${risk.reasons.join(" ")}`);
+  }
+  // Case 4: News Mode
+  else if (sessionInfo.isNewsMode) {
+    decisionType = SetupDecisionType.NO_TRADE;
+    decisionLabelIndo = "TIDAK ADA TRADE";
+    reasons.push("Mode Berita Berdampak Tinggi aktif. Seluruh setup valid ditangguhkan demi perlindungan modal.");
+  }
+  // Case 5: H1 Neutral / Unclear
+  else if (h1.bias === "Netral") {
+    decisionType = SetupDecisionType.NO_TRADE;
+    decisionLabelIndo = "TIDAK ADA TRADE";
+    reasons.push("Struktur tren makro H1 tidak jelas / sideways. Tidak ada trade saat tren tidak terarah.");
+  }
+  // Case 6: BUY Setup Evaluation
+  else if (isBullishDirection) {
+    const allPreRetestConditionsMet =
+      h1Pass && m15Pass && liqPass && chochPass && dispPass && !riskBlocked && dataQuality.analysisAllowed;
+
+    // Check if expired
+    if (planResult.isExpired) {
+      decisionType = SetupDecisionType.SETUP_EXPIRED;
+      decisionLabelIndo = "SETUP KEDALUWARSA";
+      reasons.push(planResult.failureReason || "Setup sudah kedaluwarsa. Jangan mengejar harga.");
     }
-    if (!m15.matchesH1Bias) {
-      reasons.push(`Menunggu harga melakukan pullback ke area ${h1.bias === "Bullish" ? "Diskon (Area Beli)" : "Premium (Area Jual)"}.`);
+    // Check if all confluence + retest met
+    else if (allPreRetestConditionsMet && retestPass) {
+      // HARD GATE: Execution Plan MUST be complete and valid
+      if (!planResult.isValid || !planResult.plan) {
+        if (planResult.failureReason?.includes("Risk/Reward")) {
+          decisionType = SetupDecisionType.NO_TRADE;
+          decisionLabelIndo = "TIDAK ADA TRADE";
+          reasons.push("Ruang menuju target belum cukup untuk memenuhi Risk/Reward minimum (min 1:2.0).");
+        } else {
+          decisionType = SetupDecisionType.WAIT_BUY;
+          decisionLabelIndo = "TUNGGU BUY";
+          reasons.push(planResult.failureReason || "Parameter eksekusi (SL/TP struktural) belum memenuhi syarat valid.");
+        }
+      } else {
+        decisionType = SetupDecisionType.BUY_SETUP_VALID;
+        decisionLabelIndo = "SETUP BUY VALID";
+        reasons.push(
+          `Seluruh kondisi setup BUY terkonfirmasi: H1 bias bullish, pullback M15 di diskon, SSL tersapu, M5 CHoCH + displacement, retest bertahan, RR 1:${planResult.plan.rrToTp1.toFixed(1)} (>= 1:2.0), dan risiko akun aman.`
+        );
+      }
     }
-    if (liq.status !== (h1.bias === "Bullish" ? "Likuiditas bawah tersapu" : "Likuiditas atas tersapu")) {
-      reasons.push("Menunggu penyapuan likuiditas (liquidity sweep) sebelum memicu konfirmasi entry.");
+    // Check if SETUP_FORMING (Pre-alert condition: everything met except retest)
+    else if (allPreRetestConditionsMet && !retestPass && m5.retestStatus !== "Gagal") {
+      decisionType = SetupDecisionType.SETUP_FORMING;
+      decisionLabelIndo = "SETUP TERBENTUK";
+      reasons.push("Setup BUY sedang terbentuk. Struktur mikro M5 telah bergeser (CHoCH + displacement). Menunggu retest M5 sebelum validasi akhir.");
+    } else {
+      decisionType = SetupDecisionType.WAIT_BUY;
+      decisionLabelIndo = "TUNGGU BUY";
+
+      if (!m15Pass) {
+        reasons.push("Menunggu pullback M15 masuk ke area Diskon.");
+      } else if (!liqPass) {
+        reasons.push("Menunggu penyapuan Sellside Liquidity (SSL) sebelum konfirmasi.");
+      } else if (!chochPass) {
+        reasons.push("Menunggu terbentuknya pergeseran struktur mikro (CHoCH/MSS) pada M5.");
+      } else if (!dispPass) {
+        reasons.push("Menunggu candle penembusan bertenaga (displacement) pada M5.");
+      } else if (m5.retestStatus === "Gagal") {
+        reasons.push("Retest level breakdown/out gagal menahan harga. Tunggu pembentukan struktur baru.");
+      } else {
+        reasons.push("Menunggu konfirmasi akhir sebelum mempertimbangkan entry BUY.");
+      }
     }
-    if (m5.retestStatus === "Menunggu") {
-      reasons.push("CHoCH terbentuk, namun retest belum terjadi. Sesuai aturan retest: Wajib TUNGGU.");
+  }
+  // Case 7: SELL Setup Evaluation
+  else if (isBearishDirection) {
+    const allPreRetestConditionsMet =
+      h1Pass && m15Pass && liqPass && chochPass && dispPass && !riskBlocked && dataQuality.analysisAllowed;
+
+    // Check if expired
+    if (planResult.isExpired) {
+      decisionType = SetupDecisionType.SETUP_EXPIRED;
+      decisionLabelIndo = "SETUP KEDALUWARSA";
+      reasons.push(planResult.failureReason || "Setup sudah kedaluwarsa. Jangan mengejar harga.");
     }
-    if (!m5.chochDetected) {
-      reasons.push("Belum ada konfirmasi pergeseran struktur mikro (CHoCH) pada M5.");
+    // Check if all confluence + retest met
+    else if (allPreRetestConditionsMet && retestPass) {
+      // HARD GATE: Execution Plan MUST be complete and valid
+      if (!planResult.isValid || !planResult.plan) {
+        if (planResult.failureReason?.includes("Risk/Reward")) {
+          decisionType = SetupDecisionType.NO_TRADE;
+          decisionLabelIndo = "TIDAK ADA TRADE";
+          reasons.push("Ruang menuju target belum cukup untuk memenuhi Risk/Reward minimum (min 1:2.0).");
+        } else {
+          decisionType = SetupDecisionType.WAIT_SELL;
+          decisionLabelIndo = "TUNGGU SELL";
+          reasons.push(planResult.failureReason || "Parameter eksekusi (SL/TP struktural) belum memenuhi syarat valid.");
+        }
+      } else {
+        decisionType = SetupDecisionType.SELL_SETUP_VALID;
+        decisionLabelIndo = "SETUP SELL VALID";
+        reasons.push(
+          `Seluruh kondisi setup SELL terkonfirmasi: H1 bias bearish, pullback M15 di premium, BSL tersapu, M5 CHoCH + displacement, retest bertahan, RR 1:${planResult.plan.rrToTp1.toFixed(1)} (>= 1:2.0), dan risiko akun aman.`
+        );
+      }
+    }
+    // Check if SETUP_FORMING (Pre-alert condition: everything met except retest)
+    else if (allPreRetestConditionsMet && !retestPass && m5.retestStatus !== "Gagal") {
+      decisionType = SetupDecisionType.SETUP_FORMING;
+      decisionLabelIndo = "SETUP TERBENTUK";
+      reasons.push("Setup SELL sedang terbentuk. Struktur mikro M5 telah bergeser (CHoCH + displacement). Menunggu retest M5 sebelum validasi akhir.");
+    } else {
+      decisionType = SetupDecisionType.WAIT_SELL;
+      decisionLabelIndo = "TUNGGU SELL";
+
+      if (!m15Pass) {
+        reasons.push("Menunggu pullback M15 masuk ke area Premium.");
+      } else if (!liqPass) {
+        reasons.push("Menunggu penyapuan Buyside Liquidity (BSL) sebelum konfirmasi.");
+      } else if (!chochPass) {
+        reasons.push("Menunggu terbentuknya pergeseran struktur mikro (CHoCH/MSS) pada M5.");
+      } else if (!dispPass) {
+        reasons.push("Menunggu candle penembusan bertenaga (displacement) pada M5.");
+      } else if (m5.retestStatus === "Gagal") {
+        reasons.push("Retest level breakdown/out gagal menahan harga. Tunggu pembentukan struktur baru.");
+      } else {
+        reasons.push("Menunggu konfirmasi akhir sebelum mempertimbangkan entry SELL.");
+      }
     }
   }
 
-  // 17. Invalidation & What Changes the Bias
+  // Invalidation text
   let invalidationText = "";
-  if (h1.bias === "Bullish") {
-    invalidationText = `Bias bullish dibatalkan jika harga menembus dan candle H1 ditutup di bawah swing low $${h1.recentLow?.toFixed(2) || "kunci"}. Kondisi entry gugur jika M5 retest gagal menahan level $${m5.breakLevel?.toFixed(2) || "break"}.`;
-  } else if (h1.bias === "Bearish") {
-    invalidationText = `Bias bearish dibatalkan jika harga menembus dan candle H1 ditutup di atas swing high $${h1.recentHigh?.toFixed(2) || "kunci"}. Kondisi entry gugur jika M5 retest gagal menahan level $${m5.breakLevel?.toFixed(2) || "break"}.`;
+  if (isBullishDirection) {
+    invalidationText = `Bias bullish dibatalkan jika candle H1 ditutup di bawah swing low $${h1.recentLow?.toFixed(2) || "kunci"}. Kondisi entry gugur jika level retest $${m5.breakLevel?.toFixed(2) || "break"} gagal menahan harga.`;
+  } else if (isBearishDirection) {
+    invalidationText = `Bias bearish dibatalkan jika candle H1 ditutup di atas swing high $${h1.recentHigh?.toFixed(2) || "kunci"}. Kondisi entry gugur jika level retest $${m5.breakLevel?.toFixed(2) || "break"} gagal menahan harga.`;
   } else {
     invalidationText =
-      "Tren belum terbentuk. Bias baru akan terkonfirmasi setelah terjadi penutupan candle H1 di luar rentang konsolidasi saat ini.";
+      "Tren belum terarah. Bias baru akan terkonfirmasi setelah penutupan candle H1 menembus konsolidasi saat ini.";
   }
 
-  // Calculate execution plan only if SETUP VALID
-  let executionPlan: ExecutionPlan | null = null;
-  if (decisionType === SetupDecisionType.VALID_SETUP) {
-    executionPlan = calculateExecutionPlan(
-      h1,
-      m15,
-      liq,
-      m5,
-      currentPrice,
-      sessionInfo,
-      targetRR
-    );
-  }
+  const isValidSetup =
+    decisionType === SetupDecisionType.BUY_SETUP_VALID ||
+    decisionType === SetupDecisionType.SELL_SETUP_VALID;
+
+  // Only attach execution plan if valid or forming
+  const executionPlan = isValidSetup || decisionType === SetupDecisionType.SETUP_FORMING ? planResult.plan : null;
 
   const decision: SetupDecision = {
     decision: decisionType,
     decisionLabelIndo,
-    marketRegime: h1.structure === "HH / HL" || h1.structure === "LH / LL" ? "Trending Terarah" : "Konsolidasi / Range",
+    marketRegime:
+      h1.structure === "HH / HL" || h1.structure === "LH / LL"
+        ? "Trending Terarah"
+        : "Konsolidasi / Range",
     htfBias: `${h1.bias} (${h1.structure})`,
     liquidity: liq.status,
     m15Location: `${m15.location} • ${m15.pullbackStatus}`,
     m5Confirmation: m5.status,
     riskStatus: risk.status,
     confidence,
-    isReadyForEntry: decisionType === SetupDecisionType.VALID_SETUP,
+    isReadyForEntry: isValidSetup,
     reasons,
     invalidationText,
     timestamp: Date.now(),
@@ -1220,3 +1586,4 @@ export function evaluateInstitutionalConfluence(
     executionPlan,
   };
 }
+

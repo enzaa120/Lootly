@@ -54,6 +54,18 @@
             "maxDailyLossPercent": { "type": "number" },
             "stopAfterLosses": { "type": "number" }
           }
+        },
+        "pushSubscriptions": {
+          "description": "Web Push notification client device registrations",
+          "fields": {
+            "endpoint": { "type": "string" },
+            "p256dh": { "type": "string" },
+            "auth": { "type": "string" },
+            "deviceLabel": { "type": "string" },
+            "enabled": { "type": "boolean" },
+            "createdAt": { "type": "string" },
+            "updatedAt": { "type": "string" }
+          }
         }
       }
     },
@@ -130,15 +142,34 @@
     "aiDeskAnalyses": {
       "description": "Institutional evaluation records and setup analysis snapshots from Meja Trading AI",
       "fields": {
+        "setupAnalysisId": { "type": "string" },
         "symbol": { "type": "string" },
+        "direction": { "type": "string" },
         "timestamp": { "type": "number" },
         "session": { "type": "string" },
         "decision": { "type": "string" },
         "decisionLabelIndo": { "type": "string" },
         "confidenceLabel": { "type": "string" },
         "ruleVersion": { "type": "string" },
+        "entryZone": { "type": "string" },
+        "referenceEntry": { "type": "number" },
+        "stopLoss": { "type": "number" },
+        "tp1": { "type": "number" },
+        "tp2": { "type": "number" },
+        "rrToTp1": { "type": "number" },
+        "rrToTp2": { "type": "number" },
+        "invalidationLevel": { "type": "number" },
+        "invalidationReason": { "type": "string" },
+        "setupCreatedAt": { "type": "number" },
+        "setupExpiresAt": { "type": "number" },
+        "marketPriceAtSignal": { "type": "number" },
+        "preAlertSent": { "type": "boolean" },
+        "validAlertSent": { "type": "boolean" },
+        "pushSentAt": { "type": "string" },
+        "marketDataTimestamp": { "type": "number" },
         "invalidation": { "type": "string" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
       }
     }
   }

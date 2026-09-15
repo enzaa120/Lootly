@@ -181,14 +181,33 @@ export interface CandleItem {
 }
 
 export enum SetupDecisionType {
-  VALID_SETUP = "VALID_SETUP",
-  WAIT = "WAIT",
+  BUY_SETUP_VALID = "BUY_SETUP_VALID",
+  SELL_SETUP_VALID = "SELL_SETUP_VALID",
+  WAIT_BUY = "WAIT_BUY",
+  WAIT_SELL = "WAIT_SELL",
   NO_TRADE = "NO_TRADE",
+  SETUP_EXPIRED = "SETUP_EXPIRED",
+  SETUP_FORMING = "SETUP_FORMING",
+  /** @deprecated backward compatibility with historical records */
+  VALID_SETUP = "VALID_SETUP",
+  /** @deprecated backward compatibility with historical records */
+  WAIT = "WAIT",
 }
 
-export type DecisionLabelIndo = "SETUP VALID" | "TUNGGU" | "TIDAK ADA TRADE";
-export type ConfidenceLabel = "Tinggi" | "Sedang" | "Rendah";
+export type DecisionLabelIndo =
+  | "SETUP BUY VALID"
+  | "SETUP SELL VALID"
+  | "TUNGGU BUY"
+  | "TUNGGU SELL"
+  | "TIDAK ADA TRADE"
+  | "SETUP KEDALUWARSA"
+  | "SETUP TERBENTUK"
+  | "SETUP VALID"
+  | "TUNGGU";
+
+export type ConfidenceLabel = "Kuat" | "Sedang" | "Lemah" | "Tinggi" | "Rendah";
 export type ChecklistItemStatus = "passed" | "waiting" | "failed";
+export type RiskFilterStatus = "AMAN" | "PERINGATAN" | "DIBLOKIR";
 
 export interface ConfluenceChecklistItem {
   id: string;
@@ -241,6 +260,7 @@ export interface M5ConfirmationResult {
 
 export interface RiskAnalysisResult {
   status: "Aman" | "Waspada" | "Terlalu Berisiko";
+  riskFilter: RiskFilterStatus;
   reasons: string[];
   isBreached: boolean;
   dailyLossSoFar: number;
@@ -250,17 +270,95 @@ export interface RiskAnalysisResult {
 
 export interface ExecutionPlan {
   direction: "BUY" | "SELL";
-  htfBias: string;
-  m15Area: string;
-  liquidityEvent: string;
-  m5Confirmation: string;
-  entryZone: string;
-  stopLossRef: number;
-  takeProfitRef: number;
-  estimatedRR: number;
+  entryLow: number;
+  entryHigh: number;
+  referenceEntry: number;
+  stopLoss: number;
+  tp1: number;
+  tp2: number | null;
+  rrToTp1: number;
+  rrToTp2: number | null;
   invalidationLevel: number;
-  sessionNote: string;
-  riskStatus: string;
+  invalidationReason: string;
+  setupCreatedAt: number;
+  setupExpiresAt: number;
+  marketPriceAtSignal: number;
+  // Compatibility references
+  entryArea: string;
+  entryZone?: string;
+  stopLossRef?: number;
+  takeProfitRef?: number;
+  estimatedRR?: number;
+  rr: number;
+  invalidation: string;
+  timestamp: number;
+  dataFreshness: string;
+  htfBias?: string;
+  m15Area?: string;
+  liquidityEvent?: string;
+  m5Confirmation?: string;
+  sessionNote?: string;
+  riskStatus?: string;
+}
+
+export interface AiDeskAnalysisRecord {
+  id?: string;
+  setupAnalysisId: string;
+  symbol: string;
+  direction: "BUY" | "SELL" | "NONE";
+  state: SetupDecisionType;
+  decisionLabelIndo: DecisionLabelIndo;
+  confidence: "Kuat" | "Sedang" | "Lemah";
+  h1Bias: string;
+  m15Pullback: string;
+  liquiditySweep: string;
+  m5StructureShift: string;
+  displacement: string;
+  retest: string;
+  riskStatus: RiskFilterStatus;
+  entryZone?: string;
+  entryLow?: number;
+  entryHigh?: number;
+  referenceEntry?: number;
+  stopLoss?: number;
+  tp1?: number;
+  tp2?: number;
+  rr?: number;
+  rrToTp1?: number;
+  rrToTp2?: number;
+  invalidationLevel?: number;
+  invalidationReason?: string;
+  invalidation?: string;
+  setupCreatedAt?: number;
+  setupExpiresAt?: number;
+  marketPriceAtSignal?: number;
+  reasons: string[];
+  marketDataTimestamp: number;
+  createdAt: string;
+  updatedAt: string;
+  notificationSent: boolean;
+  preAlertSent?: boolean;
+  validAlertSent?: boolean;
+  pushSentAt?: string;
+  invalidated?: boolean;
+}
+
+export interface DeskNotificationSettings {
+  notifyForming: boolean;
+  notifyValid: boolean;
+  soundEnabled: boolean;
+  pushEnabled: boolean;
+}
+
+export interface PushSubscriptionRecord {
+  id?: string;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  deviceLabel: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface TwelveDataProviderStatus {
