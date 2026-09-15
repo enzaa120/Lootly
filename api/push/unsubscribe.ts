@@ -45,13 +45,13 @@ export default async function handler(req: any, res: any) {
 
   try {
     const body = await extractRequestBody(req);
-    const { endpoint } = body || {};
+    const { endpoint, userId } = body || {};
 
     if (!endpoint) {
       return res.status(400).json({ success: false, error: "Subscription endpoint required." });
     }
 
-    const result = unregisterSubscription(endpoint);
+    const result = await unregisterSubscription(endpoint, userId);
     return res.status(200).json({ success: true, totalActive: result.totalActive });
   } catch (err: any) {
     console.error("[Push Unsubscribe Handler] Error:", err);

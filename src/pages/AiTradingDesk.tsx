@@ -33,6 +33,7 @@ import {
   dispatchPushAlert,
   playAlertChime,
   getExistingPushSubscription,
+  ensurePushSubscriptionSynced,
 } from "../lib/pushNotifications";
 import {
   evaluateDataQuality,
@@ -233,15 +234,29 @@ export function AiTradingDesk() {
     } catch {}
   }, [notificationSettings]);
 
-  // Check existing push subscription on mount
+  // Check existing push subscription on mount and auto-sync to Firestore (Requirement 11)
   useEffect(() => {
     getExistingPushSubscription().then((sub) => {
       if (sub) {
         setIsPushActive(true);
         setDesktopNotifAllowed(true);
+        const effectiveUid = user?.uid || settings?.userId || "user_trader";
+        ensurePushSubscriptionSynced(effectiveUid);
       }
     });
-  }, []);
+  }, [user?.uid, settings?.userId]);
+
+  // When notification settings dialog opens, re-sync existing subscription to Firestore (Requirement 11)
+  useEffect(() => {
+    if (showNotifSettings) {
+      getExistingPushSubscription().then((sub) => {
+        if (sub) {
+          const effectiveUid = user?.uid || settings?.userId || "user_trader";
+          ensurePushSubscriptionSynced(effectiveUid);
+        }
+      });
+    }
+  }, [showNotifSettings, user?.uid, settings?.userId]);
 
   // Web Push Handlers
   const handleEnableWebPush = async () => {

@@ -46,8 +46,13 @@ export default async function handler(req: any, res: any) {
   try {
     const body = await extractRequestBody(req);
     const { targetUserId } = body || {};
+    const uid = targetUserId && targetUserId !== "guest_trader" ? targetUserId : "user_trader";
 
-    const subs = getSubscriptionsForUser(targetUserId);
+    const subs = await getSubscriptionsForUser(uid);
+
+    // Requirement 10: safe production log
+    console.log(`[Push] test uid=${uid} subscriptions=${subs.length}`);
+
     if (subs.length === 0) {
       return res.status(404).json({
         success: false,
@@ -63,7 +68,7 @@ export default async function handler(req: any, res: any) {
         tag: `lootly-test-${Date.now()}`,
         data: { url: "/ai-desk", type: "TEST" },
       },
-      targetUserId
+      uid
     );
 
     return res.status(200).json({

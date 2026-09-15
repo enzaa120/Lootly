@@ -107,20 +107,26 @@ app.get("/api/push/public-key", (_req, res) => {
 });
 
 // 2. Subscribe a browser client device for Web Push notifications
-app.post("/api/push/subscribe", (req, res) => {
+app.post("/api/push/subscribe", async (req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   try {
     const { subscription, userId, deviceLabel } = req.body || {};
     if (!subscription || !subscription.endpoint) {
       return res.status(400).json({ success: false, error: "PushSubscription endpoint required." });
     }
-    const result = registerSubscription({
+    const result = await registerSubscription({
       endpoint: subscription.endpoint,
       keys: subscription.keys,
       userId,
       deviceLabel,
     });
-    return res.json({ success: true, totalActive: result.totalActive });
+    return res.json({
+      success: true,
+      uid: result.uid,
+      subscriptionId: result.subscriptionId,
+      stored: result.stored,
+      totalActive: result.totalActive,
+    });
   } catch (err: any) {
     console.error("[Push Subscribe Express] Error:", err);
     return res.status(500).json({ success: false, error: err?.message || String(err) });
@@ -128,14 +134,14 @@ app.post("/api/push/subscribe", (req, res) => {
 });
 
 // 3. Unsubscribe a browser client device
-app.post("/api/push/unsubscribe", (req, res) => {
+app.post("/api/push/unsubscribe", async (req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   try {
-    const { endpoint } = req.body || {};
+    const { endpoint, userId } = req.body || {};
     if (!endpoint) {
       return res.status(400).json({ success: false, error: "Subscription endpoint required." });
     }
-    const result = unregisterSubscription(endpoint);
+    const result = await unregisterSubscription(endpoint, userId);
     return res.json({ success: true, totalActive: result.totalActive });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: err?.message || String(err) });
@@ -169,7 +175,12 @@ app.post("/api/push/test", async (req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
   try {
     const { targetUserId } = req.body || {};
-    const subs = getSubscriptionsForUser(targetUserId);
+    const uid = targetUserId && targetUserId !== "guest_trader" ? targetUserId : "user_trader";
+    const subs = await getSubscriptionsForUser(uid);
+
+    // Requirement 10: safe production log
+    console.log(`[Push] test uid=${uid} subscriptions=${subs.length}`);
+
     if (subs.length === 0) {
       return res.status(404).json({
         success: false,
@@ -183,7 +194,7 @@ app.post("/api/push/test", async (req, res) => {
         tag: `lootly-test-${Date.now()}`,
         data: { url: "/ai-desk", type: "TEST" },
       },
-      targetUserId
+      uid
     );
     return res.json({
       success: true,

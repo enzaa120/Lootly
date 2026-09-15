@@ -51,14 +51,20 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: "PushSubscription endpoint required." });
     }
 
-    const result = registerSubscription({
+    const result = await registerSubscription({
       endpoint: subscription.endpoint,
       keys: subscription.keys,
       userId,
       deviceLabel,
     });
 
-    return res.status(200).json({ success: true, totalActive: result.totalActive });
+    return res.status(200).json({
+      success: true,
+      uid: result.uid,
+      subscriptionId: result.subscriptionId,
+      stored: result.stored,
+      totalActive: result.totalActive,
+    });
   } catch (err: any) {
     console.error("[Push Subscribe Handler] Error:", err);
     return res.status(500).json({ success: false, error: err?.message || String(err) });

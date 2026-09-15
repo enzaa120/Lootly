@@ -108,48 +108,66 @@ export async function subscribeToWebPush(userId?: string): Promise<{
       });
     }
 
-    // 5. Save to server backend
+    // 5. Save to server backend with deterministic Firestore persistence
     const subJson = sub.toJSON();
-    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : null);
+    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : "user_trader");
     const saveRes = await fetch("/api/push/subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         subscription: subJson,
-        userId: effectiveUid || userId || "guest_trader",
+        userId: effectiveUid,
         deviceLabel: `${navigator.platform} (${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"})`,
       }),
     });
 
     if (!saveRes.ok) {
-      throw new Error(`Gagal mendaftarkan endpoint push ke server: status ${saveRes.status}`);
-    }
-
-    // 6. Persist subscription document in Firestore for authenticated UID
-    if (effectiveUid) {
-      try {
-        const subDocId = btoa(sub.endpoint).slice(-32).replace(/[/+=]/g, "_");
-        await setDoc(
-          doc(db, "users", effectiveUid, "pushSubscriptions", subDocId),
-          {
-            endpoint: sub.endpoint,
-            keys: subJson.keys,
-            deviceLabel: `${navigator.platform} (${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"})`,
-            userId: effectiveUid,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          },
-          { merge: true }
-        );
-      } catch (fsErr) {
-        console.warn("[Push] Firestore subscription sync notice:", fsErr);
-      }
+      const errData = await saveRes.json().catch(() => ({}));
+      throw new Error(errData?.error || `Gagal mendaftarkan endpoint push ke server: status ${saveRes.status}`);
     }
 
     return { success: true, subscription: sub };
   } catch (err: any) {
     console.error("[Push] Subscription failed:", err);
     return { success: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Requirement 11: Auto re-register existing browser push subscription
+ * if the browser reports an existing subscription in PushManager.
+ */
+export async function ensurePushSubscriptionSynced(userId?: string): Promise<{
+  synced: boolean;
+  subscription: PushSubscription | null;
+}> {
+  if (!isPushSupported()) return { synced: false, subscription: null };
+  try {
+    const reg = await navigator.serviceWorker.getRegistration("/sw.js");
+    if (!reg) return { synced: false, subscription: null };
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return { synced: false, subscription: null };
+
+    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : "user_trader");
+    const subJson = sub.toJSON();
+
+    const saveRes = await fetch("/api/push/subscribe", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        subscription: subJson,
+        userId: effectiveUid,
+        deviceLabel: `${navigator.platform} (${navigator.userAgent.includes("Mobile") ? "Mobile" : "Desktop"})`,
+      }),
+    });
+
+    if (saveRes.ok) {
+      return { synced: true, subscription: sub };
+    }
+    return { synced: false, subscription: sub };
+  } catch (err) {
+    console.warn("[Push] ensurePushSubscriptionSynced notice:", err);
+    return { synced: false, subscription: null };
   }
 }
 
@@ -162,21 +180,12 @@ export async function unsubscribeFromWebPush(): Promise<boolean> {
     if (sub) {
       const endpoint = sub.endpoint;
       await sub.unsubscribe();
+      const currentUid = auth.currentUser?.uid || "user_trader";
       await fetch("/api/push/unsubscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endpoint }),
+        body: JSON.stringify({ endpoint, userId: currentUid }),
       });
-
-      const currentUid = auth.currentUser?.uid;
-      if (currentUid) {
-        try {
-          const subDocId = btoa(endpoint).slice(-32).replace(/[/+=]/g, "_");
-          await deleteDoc(doc(db, "users", currentUid, "pushSubscriptions", subDocId));
-        } catch (fsErr) {
-          console.warn("[Push] Firestore delete subscription notice:", fsErr);
-        }
-      }
     }
     return true;
   } catch (err) {
@@ -187,10 +196,15 @@ export async function unsubscribeFromWebPush(): Promise<boolean> {
 
 export async function triggerTestPushNotification(userId?: string): Promise<{ success: boolean; message: string }> {
   try {
+    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : "user_trader");
+
+    // Requirement 11: Auto re-register existing browser push subscription if present
+    await ensurePushSubscriptionSynced(effectiveUid);
+
     const res = await fetch("/api/push/test", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetUserId: userId }),
+      body: JSON.stringify({ targetUserId: effectiveUid }),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -213,6 +227,7 @@ export async function dispatchPushAlert(
   userId?: string
 ): Promise<{ sent: number; failed: number; skippedDuplicate?: boolean }> {
   try {
+    const effectiveUid = auth.currentUser?.uid || (userId && userId !== "guest_trader" ? userId : "user_trader");
     const res = await fetch("/api/push/send-alert", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -230,7 +245,7 @@ export async function dispatchPushAlert(
             type: payload.type,
           },
         },
-        targetUserId: userId,
+        targetUserId: effectiveUid,
       }),
     });
     if (!res.ok) {
