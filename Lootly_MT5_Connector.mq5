@@ -8,7 +8,6 @@
 #property version     "1.00"
 #property description "Lootly Read-Only MT5 Direct Connector for Valetax & MetaTrader 5"
 #property description "Automatically synchronizes mobile & desktop trading activity to Lootly Cloud"
-#property strict
 
 //--- Input Parameters
 input group "=== LOOTLY CLOUD SETTINGS ==="
@@ -90,8 +89,8 @@ void OnDeinit(const int reason)
 //| Catches all mobile and desktop order/position/deal executions    |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans,
-                        const MqlTradeOrder& order,
-                        const MqlTradeDeal& deal)
+                        const MqlTradeRequest& request,
+                        const MqlTradeResult& result)
 {
    if(!g_isInitialized) return;
 
