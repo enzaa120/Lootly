@@ -57,6 +57,16 @@ export function formatUSD(amount: number, showSign: boolean = false): string {
   return formatted;
 }
 
+/**
+ * Universal currency formatter supporting USD and IDR
+ */
+export function formatMoney(amount: number, currency: "USD" | "IDR" = "USD", showSign: boolean = false): string {
+  if (currency === "USD") {
+    return formatUSD(amount, showSign);
+  }
+  return formatIDR(amount, showSign);
+}
+
 export function formatPercent(percent: number, showSign: boolean = true): string {
   if (isNaN(percent) || percent === null || percent === undefined) return "0%";
   const formatted = Math.abs(percent).toFixed(1).replace(/\.0$/, "");
@@ -73,8 +83,8 @@ export function formatPercent(percent: number, showSign: boolean = true): string
  * Format profit showing both nominal IDR and percentage
  * Examples: +Rp 250.000 (+2.5%), -Rp 120.000 (-1.1%)
  */
-export function formatProfitDual(pnlIdr: number, pnlPercent?: number): string {
-  const nominal = formatIDR(pnlIdr, true);
+export function formatProfitDual(amount: number, pnlPercent?: number, currency: "USD" | "IDR" = "USD"): string {
+  const nominal = currency === "USD" ? formatUSD(amount, true) : formatIDR(amount, true);
   if (pnlPercent !== undefined && !isNaN(pnlPercent)) {
     const pct = formatPercent(pnlPercent, true);
     return `${nominal} (${pct})`;

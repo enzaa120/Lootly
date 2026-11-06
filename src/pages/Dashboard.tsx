@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useAppStore, dedupeTrades } from "../store/AppContext";
-import { formatIDR, formatPercent, formatProfitDual, cn } from "../lib/utils";
+import { formatIDR, formatUSD, formatPercent, formatProfitDual, formatMoney, cn } from "../lib/utils";
 import { TradingCalendar } from "../components/ui/TradingCalendar";
 import { 
   Plus, 
@@ -34,7 +34,7 @@ import {
 } from "recharts";
 
 export function Dashboard() {
-  const { accountMode, setAccountMode, settings, trades, transactions } = useAppStore();
+  const { accountMode, setAccountMode, settings, trades, transactions, displayCurrency, setDisplayCurrency, mt5Account } = useAppStore();
   const navigate = useNavigate();
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -53,27 +53,40 @@ export function Dashboard() {
     return transactions.filter((t) => t.accountMode === accountMode);
   }, [transactions, accountMode]);
 
-  const startingBalance = accountMode === "demo" 
-    ? settings.startingBalanceDemo 
-    : settings.startingBalanceReal;
-  
-  const targetBalance = accountMode === "demo" 
-    ? settings.targetBalanceDemo 
-    : settings.targetBalanceReal;
+  const hasMt5 = Boolean(mt5Account && typeof mt5Account.balance === "number");
 
   // Realized Net PnL from trades
   const closedTrades = useMemo(() => {
     return modeTrades.filter((t) => t.result !== "open");
   }, [modeTrades]);
 
+  const totalPnlUsd = useMemo(() => {
+    return closedTrades.reduce((acc, t) => acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800))), 0);
+  }, [closedTrades, settings.usdToIdr]);
+
   const totalPnlIdr = useMemo(() => {
     return closedTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
   }, [closedTrades]);
 
-  const currentBalance = startingBalance + totalPnlIdr;
+  const totalPnl = displayCurrency === "USD" ? totalPnlUsd : totalPnlIdr;
+
+  const startingBalance = useMemo(() => {
+    if (hasMt5 && displayCurrency === "USD") {
+      return Number(Math.max(0, mt5Account.balance - totalPnlUsd).toFixed(2));
+    }
+    const base = accountMode === "demo" ? settings.startingBalanceDemo : settings.startingBalanceReal;
+    return displayCurrency === "USD" ? Number((base / (settings.usdToIdr || 15800)).toFixed(2)) : base;
+  }, [hasMt5, mt5Account, totalPnlUsd, accountMode, settings, displayCurrency]);
+
+  const currentBalance = useMemo(() => {
+    if (hasMt5 && displayCurrency === "USD") {
+      return mt5Account.balance;
+    }
+    return startingBalance + totalPnl;
+  }, [hasMt5, mt5Account, startingBalance, totalPnl, displayCurrency]);
 
   const growthPercentage = startingBalance > 0 
-    ? (totalPnlIdr / startingBalance) * 100 
+    ? (totalPnl / startingBalance) * 100 
     : 0;
 
   // Win Rate & Trade Counts
@@ -100,10 +113,18 @@ export function Dashboard() {
     return (totalWin / totalLoss).toFixed(2);
   }, [winTrades, lossTrades]);
 
+  const targetBalance = useMemo(() => {
+    const target = accountMode === "demo" ? settings.targetBalanceDemo : settings.targetBalanceReal;
+    if (displayCurrency === "USD") {
+      return hasMt5 ? Number((mt5Account.balance * 1.5).toFixed(2)) : Number((target / (settings.usdToIdr || 15800)).toFixed(2));
+    }
+    return target;
+  }, [hasMt5, mt5Account, accountMode, settings, displayCurrency]);
+
   // Target progress percentage
   const targetGain = targetBalance - startingBalance;
   const targetProgress = targetGain > 0 
-    ? Math.max(0, (totalPnlIdr / targetGain) * 100) 
+    ? Math.max(0, (totalPnl / targetGain) * 100) 
     : targetBalance > 0 
       ? Math.max(0, (currentBalance / targetBalance) * 100) 
       : 0;
@@ -127,51 +148,66 @@ export function Dashboard() {
 
   const isConsecutiveLossLimitExceeded = consecutiveLossCount >= (settings.stopAfterLosses || 2);
 
-  // Daily Loss Check (Connected to settings.maxDailyLossIdrDemo / maxDailyLossIdrReal)
+  // Daily Loss Check
   const today = new Date().toISOString().split("T")[0];
   const todayTrades = useMemo(() => {
     return closedTrades.filter((t) => (t.date ? t.date.split("T")[0] : t.createdAt?.split("T")[0]) === today);
   }, [closedTrades, today]);
 
   const todayNetPnl = useMemo(() => {
+    if (displayCurrency === "USD") {
+      return todayTrades.reduce((acc, t) => acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800))), 0);
+    }
     return todayTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
-  }, [todayTrades]);
+  }, [todayTrades, displayCurrency, settings.usdToIdr]);
 
-  // Nominal Batas Kerugian Harian (IDR)
-  const maxDailyLossIdr = accountMode === "demo"
-    ? (settings.maxDailyLossIdrDemo ?? 200000)
-    : (settings.maxDailyLossIdrReal ?? 100000);
+  // Batas Kerugian Harian
+  const maxDailyLoss = useMemo(() => {
+    const loss = accountMode === "demo"
+      ? (settings.maxDailyLossIdrDemo ?? 200000)
+      : (settings.maxDailyLossIdrReal ?? 100000);
+    if (displayCurrency === "USD") {
+      return Number((loss / (settings.usdToIdr || 15800)).toFixed(2));
+    }
+    return loss;
+  }, [accountMode, settings, displayCurrency]);
 
   const todayRealizedLoss = todayNetPnl < 0 ? Math.abs(todayNetPnl) : 0;
-  const isDailyLossLimitExceeded = maxDailyLossIdr > 0 && todayRealizedLoss >= maxDailyLossIdr;
+  const isDailyLossLimitExceeded = maxDailyLoss > 0 && todayRealizedLoss >= maxDailyLoss;
 
   // Daily Trading Plan targets & progress (from Settings)
-  const dailyTargetIdr = accountMode === "demo"
-    ? (settings.dailyProfitTargetDemoIdr ?? 300000)
-    : (settings.dailyProfitTargetRealIdr ?? 500000);
+  const dailyTarget = useMemo(() => {
+    const target = accountMode === "demo"
+      ? (settings.dailyProfitTargetDemoIdr ?? 300000)
+      : (settings.dailyProfitTargetRealIdr ?? 500000);
+    if (displayCurrency === "USD") {
+      return Number((target / (settings.usdToIdr || 15800)).toFixed(2));
+    }
+    return target;
+  }, [accountMode, settings, displayCurrency]);
 
   const dailyTargetPercent = accountMode === "demo"
     ? (settings.dailyProfitTargetDemoPercent ?? 10)
     : (settings.dailyProfitTargetRealPercent ?? 10);
 
-  const dailyProgressPercent = dailyTargetIdr > 0 
-    ? (todayNetPnl / dailyTargetIdr) * 100 
+  const dailyProgressPercent = dailyTarget > 0 
+    ? (todayNetPnl / dailyTarget) * 100 
     : 0;
 
   const dailyPlanStatus = useMemo(() => {
-    if (dailyTargetIdr <= 0) {
+    if (dailyTarget <= 0) {
       return {
         label: "Belum Ditetapkan",
         badgeClass: "bg-zinc-100 text-zinc-600 border-zinc-200",
       };
     }
-    if (todayNetPnl >= dailyTargetIdr * 1.05) {
+    if (todayNetPnl >= dailyTarget * 1.05) {
       return {
         label: "Melebihi Target",
         badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-300 font-bold",
       };
     }
-    if (todayNetPnl >= dailyTargetIdr) {
+    if (todayNetPnl >= dailyTarget) {
       return {
         label: "Target Tercapai",
         badgeClass: "bg-emerald-100 text-emerald-800 border-emerald-300 font-bold",
@@ -193,7 +229,7 @@ export function Dashboard() {
       label: "Belum Tercapai",
       badgeClass: "bg-zinc-100 text-zinc-600 border-zinc-200 font-medium",
     };
-  }, [todayNetPnl, dailyTargetIdr]);
+  }, [todayNetPnl, dailyTarget]);
 
   // Cumulative Equity series for Small Performance Chart
   const equityData = useMemo(() => {
@@ -210,17 +246,20 @@ export function Dashboard() {
     const points = [{ date: "Awal", balance: startingBalance, pnl: 0 }];
 
     sorted.forEach((t, i) => {
-      runningBalance += (t.pnlIdr || 0);
+      const pnlVal = displayCurrency === "USD"
+        ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+        : (t.pnlIdr || 0);
+      runningBalance += pnlVal;
       const label = t.date ? t.date.split("T")[0].substring(5) : `T${i + 1}`;
       points.push({
         date: label,
-        balance: runningBalance,
-        pnl: t.pnlIdr || 0,
+        balance: Number(runningBalance.toFixed(2)),
+        pnl: Number(pnlVal.toFixed(2)),
       });
     });
 
     return points;
-  }, [closedTrades, startingBalance]);
+  }, [closedTrades, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Monthly summary metrics (current calendar month)
   const currentMonthSummary = useMemo(() => {
@@ -325,6 +364,39 @@ export function Dashboard() {
             </button>
           </div>
 
+          {/* Currency Switcher (USD / IDR) */}
+          <div 
+            id="dashboard-currency-switcher"
+            className="bg-zinc-100/90 p-1 rounded-xl flex items-center border border-zinc-200/80 shadow-2xs select-none"
+          >
+            <button
+              type="button"
+              onClick={() => setDisplayCurrency("USD")}
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
+                displayCurrency === "USD"
+                  ? "bg-white text-emerald-700 shadow-2xs border border-zinc-200/60 font-extrabold"
+                  : "text-zinc-500 hover:text-zinc-800"
+              )}
+              title="Tampilkan dalam USD ($)"
+            >
+              <span>$ USD</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDisplayCurrency("IDR")}
+              className={cn(
+                "px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
+                displayCurrency === "IDR"
+                  ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60 font-extrabold"
+                  : "text-zinc-500 hover:text-zinc-800"
+              )}
+              title="Tampilkan dalam IDR (Rp)"
+            >
+              <span>Rp IDR</span>
+            </button>
+          </div>
+
           {/* + Tambah Trade */}
           <button
             id="btn-dashboard-add-trade"
@@ -364,10 +436,10 @@ export function Dashboard() {
           <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
           <div className="space-y-0.5">
             <h4 className="font-bold text-rose-950">
-              Batas Kerugian Harian Terlampaui (-{formatIDR(todayRealizedLoss)} / Batas {formatIDR(maxDailyLossIdr)})
+              Batas Kerugian Harian Terlampaui (-{formatMoney(todayRealizedLoss, displayCurrency)} / Batas {formatMoney(maxDailyLoss, displayCurrency)})
             </h4>
             <p className="text-rose-800">
-              Kerugian bersih akun {accountMode.toUpperCase()} hari ini telah mencapai -{formatIDR(todayRealizedLoss)}, melewati batas toleransi kerugian harian Anda ({formatIDR(maxDailyLossIdr)}). Disarankan tidak membuka posisi baru hari ini demi melindungi modal Anda dan mencegah revenge trading.
+              Kerugian bersih akun {accountMode.toUpperCase()} hari ini telah mencapai -{formatMoney(todayRealizedLoss, displayCurrency)}, melewati batas toleransi kerugian harian Anda ({formatMoney(maxDailyLoss, displayCurrency)}). Disarankan tidak membuka posisi baru hari ini demi melindungi modal Anda dan mencegah revenge trading.
             </p>
           </div>
         </div>
@@ -395,22 +467,22 @@ export function Dashboard() {
           <div>
             <div className="flex items-center justify-between text-zinc-500 text-xs font-medium">
               <span className="flex items-center gap-1.5">
-                <Wallet className="w-4 h-4 text-zinc-400" /> Saldo Akun Saat Ini
+                <Wallet className="w-4 h-4 text-zinc-400" /> Saldo Akun Saat Ini ({displayCurrency})
               </span>
-              <span className="text-[11px] font-mono text-zinc-400">Modal: {formatIDR(startingBalance)}</span>
+              <span className="text-[11px] font-mono text-zinc-400">Modal: {formatMoney(startingBalance, displayCurrency)}</span>
             </div>
             
             <div className="text-3xl md:text-4xl font-bold font-mono text-zinc-900 mt-3 tracking-tight">
-              {formatIDR(currentBalance)}
+              {formatMoney(currentBalance, displayCurrency)}
             </div>
 
-            {/* Total Profit/Loss Dual Display (IDR + %) */}
+            {/* Total Profit/Loss Dual Display */}
             <div className="flex items-center gap-2 mt-2">
               <span className={`inline-flex items-center gap-1 font-mono text-sm font-bold ${
-                totalPnlIdr > 0 ? "text-emerald-600" : totalPnlIdr < 0 ? "text-rose-600" : "text-zinc-600"
+                totalPnl > 0 ? "text-emerald-600" : totalPnl < 0 ? "text-rose-600" : "text-zinc-600"
               }`}>
-                {totalPnlIdr > 0 ? <TrendingUp className="w-4 h-4" /> : totalPnlIdr < 0 ? <TrendingDown className="w-4 h-4" /> : null}
-                {formatProfitDual(totalPnlIdr, growthPercentage)}
+                {totalPnl > 0 ? <TrendingUp className="w-4 h-4" /> : totalPnl < 0 ? <TrendingDown className="w-4 h-4" /> : null}
+                {formatProfitDual(totalPnl, growthPercentage, displayCurrency)}
               </span>
               <span className="text-xs text-zinc-400 font-sans">sepanjang waktu</span>
             </div>
@@ -420,7 +492,7 @@ export function Dashboard() {
           <div className="mt-6 pt-4 border-t border-zinc-100">
             <div className="flex items-center justify-between text-xs mb-1.5">
               <span className="text-zinc-500 flex items-center gap-1">
-                <Target className="w-3.5 h-3.5 text-zinc-400" /> Target Saldo: {formatIDR(targetBalance)}
+                <Target className="w-3.5 h-3.5 text-zinc-400" /> Target Saldo: {formatMoney(targetBalance, displayCurrency)}
               </span>
               <span className="font-mono font-semibold text-zinc-700">
                 {targetProgress.toFixed(1)}%
@@ -435,7 +507,7 @@ export function Dashboard() {
             <div className="flex items-center justify-between text-[11px] text-zinc-400 mt-1.5">
               <span>Sisa untuk target saldo:</span>
               <span className="font-mono font-semibold text-zinc-600">
-                {remainingToTarget > 0 ? formatIDR(remainingToTarget) : "Target Tercapai! 🎉"}
+                {remainingToTarget > 0 ? formatMoney(remainingToTarget, displayCurrency) : "Target Tercapai! 🎉"}
               </span>
             </div>
           </div>
@@ -446,7 +518,7 @@ export function Dashboard() {
           <div>
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-xs font-semibold text-zinc-900">
-                <Target className="w-4 h-4 text-emerald-600" /> Trading Plan Hari Ini
+                <Target className="w-4 h-4 text-emerald-600" /> Trading Plan Hari Ini ({displayCurrency})
               </span>
               <span className={`px-2.5 py-0.5 rounded-full text-xs border ${dailyPlanStatus.badgeClass}`}>
                 {dailyPlanStatus.label}
@@ -460,13 +532,13 @@ export function Dashboard() {
                 <div className={`text-2xl sm:text-3xl font-bold font-mono tracking-tight mt-0.5 ${
                   todayNetPnl > 0 ? "text-emerald-600" : todayNetPnl < 0 ? "text-rose-600" : "text-zinc-700"
                 }`}>
-                  {formatIDR(todayNetPnl, true)}
+                  {formatMoney(todayNetPnl, displayCurrency, true)}
                 </div>
               </div>
               <div className="text-right">
                 <span className="text-[11px] text-zinc-400 font-medium block">Target Profit Harian</span>
                 <span className="text-sm sm:text-base font-bold font-mono text-zinc-800">
-                  {formatIDR(dailyTargetIdr)}
+                  {formatMoney(dailyTarget, displayCurrency)}
                 </span>
                 <span className="text-xs font-semibold text-emerald-600 font-mono block">
                   ({dailyTargetPercent}%)
@@ -488,7 +560,7 @@ export function Dashboard() {
             <div className="w-full bg-zinc-100 h-2.5 rounded-full overflow-hidden">
               <div 
                 className={`h-full rounded-full transition-all duration-700 ${
-                  todayNetPnl >= dailyTargetIdr 
+                  todayNetPnl >= dailyTarget 
                     ? "bg-emerald-500" 
                     : todayNetPnl > 0 
                     ? "bg-blue-500" 
@@ -499,13 +571,13 @@ export function Dashboard() {
             </div>
             <div className="flex items-center justify-between text-[11px] text-zinc-500 mt-2">
               <span>
-                {todayNetPnl >= dailyTargetIdr ? (
+                {todayNetPnl >= dailyTarget ? (
                   <span className="text-emerald-700 font-medium">
-                    Surplus: +{formatIDR(todayNetPnl - dailyTargetIdr)}
+                    Surplus: +{formatMoney(todayNetPnl - dailyTarget, displayCurrency)}
                   </span>
                 ) : (
                   <span>
-                    Sisa target: <strong className="font-mono text-zinc-700">{formatIDR(Math.max(0, dailyTargetIdr - todayNetPnl))}</strong>
+                    Sisa target: <strong className="font-mono text-zinc-700">{formatMoney(Math.max(0, dailyTarget - todayNetPnl), displayCurrency)}</strong>
                   </span>
                 )}
               </span>
@@ -593,7 +665,7 @@ export function Dashboard() {
                   <span className={`text-base font-bold font-mono ${
                     currentMonthSummary.netPnl > 0 ? "text-emerald-600" : currentMonthSummary.netPnl < 0 ? "text-rose-600" : "text-zinc-700"
                   }`}>
-                    {formatIDR(currentMonthSummary.netPnl, true)}
+                    {formatMoney(currentMonthSummary.netPnl, displayCurrency, true)}
                   </span>
                   <span className={`text-xs font-semibold font-mono ${
                     currentMonthSummary.growth > 0 ? "text-emerald-600" : currentMonthSummary.growth < 0 ? "text-rose-600" : "text-zinc-500"
@@ -624,8 +696,8 @@ export function Dashboard() {
       <TradingCalendar 
         trades={modeTrades} 
         startingBalance={startingBalance} 
-        dailyTargetIdr={dailyTargetIdr} 
-        dailyLossLimitIdr={maxDailyLossIdr}
+        dailyTargetIdr={dailyTarget} 
+        dailyLossLimitIdr={maxDailyLoss}
       />
 
       {/* 3. Kurva Pertumbuhan Akun (Equity Curve) (Placed below calendar) */}
@@ -634,7 +706,7 @@ export function Dashboard() {
           <div>
             <h3 className="text-base font-bold text-zinc-900 font-display flex items-center gap-2">
               <LineChartIcon className="w-4 h-4 text-zinc-500" />
-              Kurva Pertumbuhan Akun (Equity Curve)
+              Kurva Pertumbuhan Akun (Equity Curve - {displayCurrency})
             </h3>
             <p className="text-xs text-zinc-500 mt-0.5">
               Perkembangan saldo akun kumulatif dari setiap trade yang ditutup.
@@ -643,9 +715,9 @@ export function Dashboard() {
           <div className="text-right">
             <span className="text-xs text-zinc-400 block font-mono">Net Profit</span>
             <span className={`text-sm font-bold font-mono ${
-              totalPnlIdr > 0 ? "text-emerald-600" : totalPnlIdr < 0 ? "text-rose-600" : "text-zinc-700"
+              totalPnl > 0 ? "text-emerald-600" : totalPnl < 0 ? "text-rose-600" : "text-zinc-700"
             }`}>
-              {formatIDR(totalPnlIdr, true)}
+              {formatMoney(totalPnl, displayCurrency, true)}
             </span>
           </div>
         </div>
@@ -655,8 +727,8 @@ export function Dashboard() {
             <AreaChart data={equityData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="equityGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor={totalPnlIdr >= 0 ? "#16a34a" : "#dc2626"} stopOpacity={0.15} />
-                  <stop offset="95%" stopColor={totalPnlIdr >= 0 ? "#16a34a" : "#dc2626"} stopOpacity={0.0} />
+                  <stop offset="5%" stopColor={totalPnl >= 0 ? "#16a34a" : "#dc2626"} stopOpacity={0.15} />
+                  <stop offset="95%" stopColor={totalPnl >= 0 ? "#16a34a" : "#dc2626"} stopOpacity={0.0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f4f4f5" />
@@ -672,7 +744,7 @@ export function Dashboard() {
                 fontSize={11} 
                 tickLine={false}
                 axisLine={false}
-                tickFormatter={(val) => `Rp ${(val / 1000000).toFixed(1)}jt`}
+                tickFormatter={(val) => displayCurrency === "USD" ? `$${Number(val).toLocaleString(undefined, { maximumFractionDigits: 0 })}` : `Rp ${(val / 1000000).toFixed(1)}jt`}
                 domain={['auto', 'auto']}
               />
               <Tooltip 
@@ -683,7 +755,7 @@ export function Dashboard() {
                       <div className="bg-white border border-zinc-200 rounded-xl shadow-lg p-3 text-xs">
                         <span className="font-semibold text-zinc-900 block mb-1">{data.date}</span>
                         <div className="font-mono text-zinc-600">
-                          Saldo: <span className="font-bold text-zinc-900">{formatIDR(data.balance)}</span>
+                          Saldo: <span className="font-bold text-zinc-900">{formatMoney(data.balance, displayCurrency)}</span>
                         </div>
                       </div>
                     );
@@ -694,7 +766,7 @@ export function Dashboard() {
               <Area 
                 type="monotone" 
                 dataKey="balance" 
-                stroke={totalPnlIdr >= 0 ? "#16a34a" : "#dc2626"} 
+                stroke={totalPnl >= 0 ? "#16a34a" : "#dc2626"} 
                 strokeWidth={2}
                 fillOpacity={1} 
                 fill="url(#equityGrad)" 
@@ -744,6 +816,10 @@ export function Dashboard() {
               {recentTrades.map((t) => {
                 const isWin = t.result === "win";
                 const isLoss = t.result === "loss";
+                const tradePnl = displayCurrency === "USD"
+                  ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+                  : (t.pnlIdr || 0);
+
                 return (
                   <div
                     key={`dash-mob-${t.id}`}
@@ -764,7 +840,7 @@ export function Dashboard() {
                       </div>
                       <div className="text-right font-mono">
                         <span className={`font-bold text-sm ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-700"}`}>
-                          {formatIDR(t.pnlIdr || 0, true)}
+                          {formatMoney(tradePnl, displayCurrency, true)}
                         </span>
                       </div>
                     </div>
@@ -795,7 +871,7 @@ export function Dashboard() {
                     <th className="pb-3 font-semibold uppercase tracking-wider">Tanggal & Sesi</th>
                     <th className="pb-3 font-semibold uppercase tracking-wider">Setup</th>
                     <th className="pb-3 font-semibold uppercase tracking-wider text-center">RR</th>
-                    <th className="pb-3 font-semibold uppercase tracking-wider text-right">Hasil (Nominal & %)</th>
+                    <th className="pb-3 font-semibold uppercase tracking-wider text-right">Hasil ({displayCurrency} & %)</th>
                     <th className="pb-3 pr-1 text-right">Aksi</th>
                   </tr>
                 </thead>
@@ -803,6 +879,10 @@ export function Dashboard() {
                   {recentTrades.map((t) => {
                     const isWin = t.result === "win";
                     const isLoss = t.result === "loss";
+                    const tradePnl = displayCurrency === "USD"
+                      ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+                      : (t.pnlIdr || 0);
+
                     return (
                       <tr 
                         key={t.id}
@@ -836,7 +916,7 @@ export function Dashboard() {
                           <div className={`font-mono font-bold text-xs ${
                             isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-600"
                           }`}>
-                            {formatIDR(t.pnlIdr || 0, true)}
+                            {formatMoney(tradePnl, displayCurrency, true)}
                           </div>
                           <div className={`font-mono text-[11px] ${
                             isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-400"

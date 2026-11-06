@@ -1,7 +1,7 @@
 import { useState, useMemo } from "react";
 import { Trade } from "../../types";
-import { formatIDR, formatPercent } from "../../lib/utils";
-import { dedupeTrades } from "../../store/AppContext";
+import { formatIDR, formatUSD, formatPercent, formatMoney } from "../../lib/utils";
+import { dedupeTrades, useAppStore } from "../../store/AppContext";
 import { 
   ChevronLeft, 
   ChevronRight, 
@@ -31,6 +31,7 @@ export function TradingCalendar({
   dailyTargetIdr = 500000,
   dailyLossLimitIdr = 100000
 }: TradingCalendarProps) {
+  const { displayCurrency, settings } = useAppStore();
   const navigate = useNavigate();
   const [currentDate, setCurrentDate] = useState(() => new Date());
   const [selectedDayTrades, setSelectedDayTrades] = useState<{ dateStr: string; trades: Trade[]; netPnl: number; netPercent: number } | null>(null);
@@ -94,8 +95,13 @@ export function TradingCalendar({
       const d = String(dayNum).padStart(2, "0");
       const dateStr = `${prevMonthDate.getFullYear()}-${m}-${d}`;
       const dayTrades = tradesByDate.get(dateStr) || [];
-      const netPnl = dayTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
-      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (t.pnlIdr ? (t.pnlIdr / startingBalance) * 100 : 0)), 0);
+      const netPnl = dayTrades.reduce((acc, t) => {
+        if (displayCurrency === "USD") {
+          return acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)));
+        }
+        return acc + (t.pnlIdr || 0);
+      }, 0);
+      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (startingBalance > 0 ? (netPnl / startingBalance) * 100 : 0)), 0);
 
       days.push({
         dayNumber: dayNum,
@@ -116,8 +122,13 @@ export function TradingCalendar({
       const d = String(dayNum).padStart(2, "0");
       const dateStr = `${year}-${m}-${d}`;
       const dayTrades = tradesByDate.get(dateStr) || [];
-      const netPnl = dayTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
-      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (t.pnlIdr ? (t.pnlIdr / startingBalance) * 100 : 0)), 0);
+      const netPnl = dayTrades.reduce((acc, t) => {
+        if (displayCurrency === "USD") {
+          return acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)));
+        }
+        return acc + (t.pnlIdr || 0);
+      }, 0);
+      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (startingBalance > 0 ? (netPnl / startingBalance) * 100 : 0)), 0);
 
       days.push({
         dayNumber: dayNum,

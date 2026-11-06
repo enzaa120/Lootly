@@ -117,12 +117,14 @@ interface AppState {
   isCloudSynced: boolean;
   isAuthLoading: boolean;
   displayCurrency: "USD" | "IDR";
+  mt5Account: any | null;
 }
 
 interface AppContextType extends AppState {
   setAccountMode: (mode: AccountMode) => void;
   setSelectedAsset: (asset: AssetType) => void;
   setDisplayCurrency: (currency: "USD" | "IDR") => void;
+  formatMoney: (amount: number, showSign?: boolean) => string;
   updateSettings: (newSettings: Partial<TradeSettings>) => Promise<void>;
   addTrade: (trade: Omit<Trade, "id" | "createdAt" | "updatedAt"> & { id?: string }) => Promise<string>;
   updateTrade: (id: string, trade: Partial<Trade>) => Promise<void>;
@@ -151,10 +153,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<TradeSettings>(defaultSettings);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [mt5Account, setMt5Account] = useState<any | null>(null);
 
   const setDisplayCurrency = (curr: "USD" | "IDR") => {
     setDisplayCurrencyState(curr);
     localStorage.setItem("lootly.currency", curr);
+  };
+
+  const formatMoney = (amount: number, showSign: boolean = false) => {
+    if (displayCurrency === "USD") {
+      return formatUSD(amount, showSign);
+    }
+    return formatIDR(amount, showSign);
   };
 
   // 1. Initial Local Fallback Hydration
@@ -188,11 +198,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let unsubscribeTrades: (() => void) | null = null;
     let unsubscribeSettings: (() => void) | null = null;
     let unsubscribeTransactions: (() => void) | null = null;
+    let unsubscribeMt5: (() => void) | null = null;
 
     const cleanupSubscribers = () => {
       if (unsubscribeTrades) { unsubscribeTrades(); unsubscribeTrades = null; }
       if (unsubscribeSettings) { unsubscribeSettings(); unsubscribeSettings = null; }
       if (unsubscribeTransactions) { unsubscribeTransactions(); unsubscribeTransactions = null; }
+      if (unsubscribeMt5) { unsubscribeMt5(); unsubscribeMt5 = null; }
     };
 
     const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
@@ -214,6 +226,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
             setDoc(settingsDocRef, defaultSettings).catch(console.error);
           }
         }, (err) => console.warn("Firestore settings error:", err));
+
+        // Sync MT5 Account Summary Real-Time
+        const mt5ColRef = collection(db, "users", uid, "mt5Accounts");
+        unsubscribeMt5 = onSnapshot(mt5ColRef, (snapshot) => {
+          if (!snapshot.empty) {
+            setMt5Account(snapshot.docs[0].data());
+          }
+        }, (err) => console.warn("Firestore mt5 error:", err));
 
         // Sync Trades Real-Time
         const tradesColRef = collection(db, "users", uid, "trades");
@@ -474,9 +494,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isCloudSynced,
         isAuthLoading,
         displayCurrency,
+        mt5Account,
         setAccountMode,
         setSelectedAsset,
         setDisplayCurrency,
+        formatMoney,
         updateSettings,
         addTrade,
         updateTrade,
