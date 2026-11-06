@@ -19,7 +19,8 @@ import {
   ShieldCheck,
   CheckCircle2,
   FileText,
-  AlertTriangle
+  AlertTriangle,
+  Server
 } from "lucide-react";
 
 export function TradeDetail() {
@@ -116,6 +117,31 @@ export function TradeDetail() {
           </div>
           <span className="px-2 py-0.5 rounded-md bg-white border border-emerald-300 text-emerald-800 text-[10px] font-mono font-semibold">
             AI Verified Draft
+          </span>
+        </div>
+      )}
+
+      {/* MT5 DIRECT SYNCHRONIZATION BADGE / BANNER */}
+      {trade.source === "mt5_sync" && (
+        <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-200 text-xs flex items-center justify-between gap-3 shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+              <Server className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="font-bold text-blue-950 block">
+                Disinkronkan secara Otomatis dari Valetax MetaTrader 5
+              </span>
+              <span className="text-blue-800 text-[11px]">
+                Broker: {trade.broker || "Valetax"} • Server: {trade.mt5Server || "Valetax-Live"}
+                {trade.mt5PositionTicket ? ` • Ticket Posisi: #${trade.mt5PositionTicket}` : ""}
+                {trade.commission ? ` • Komisi: $${trade.commission}` : ""}
+                {trade.swap ? ` • Swap: $${trade.swap}` : ""}
+              </span>
+            </div>
+          </div>
+          <span className="px-2 py-0.5 rounded-md bg-white border border-blue-300 text-blue-800 text-[10px] font-mono font-semibold">
+            MT5 Direct Sync
           </span>
         </div>
       )}

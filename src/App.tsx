@@ -4,7 +4,6 @@ import { AppProvider } from "./store/AppContext";
 import { Dashboard } from "./pages/Dashboard";
 import { Journal } from "./pages/Journal";
 import { AddTrade } from "./pages/AddTrade";
-import { AiTradingDesk } from "./pages/AiTradingDesk";
 import { Analytics } from "./pages/Analytics";
 import { Settings } from "./pages/Settings";
 import { TradeDetail } from "./pages/TradeDetail";
@@ -19,7 +18,7 @@ function App() {
             <Route path="journal" element={<Journal />} />
             <Route path="journal/:tradeId" element={<TradeDetail />} />
             <Route path="add" element={<AddTrade />} />
-            <Route path="ai-desk" element={<AiTradingDesk />} />
+            <Route path="ai-desk" element={<Navigate to="/" replace />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />

@@ -124,6 +124,21 @@ export interface Trade {
   // Reference to AI Trading Desk Analysis (Phase 2 decision support linkage)
   setupAnalysisId?: string;
 
+  // MT5 Direct Connector Synchronization
+  source?: "manual" | "ocr" | "mt5_sync";
+  mt5PositionTicket?: number;
+  mt5DealTicket?: number;
+  mt5OrderTicket?: number;
+  broker?: string;
+  mt5Server?: string;
+  accountNumber?: string;
+  commission?: number;
+  swap?: number;
+  pnlUsd?: number;
+  magicNumber?: number;
+  comment?: string;
+  closeTime?: string;
+
   createdAt: string;
   updatedAt: string;
 }
@@ -496,4 +511,19 @@ export interface MarketDataApiResponse {
     reason?: string;
   };
 }
+
+export type { 
+  MonitorState, 
+  MonitorExecutionResult,
+  MT5AccountMode,
+  MT5ConnectorInfo,
+  MT5ConnectorTokenRecord,
+  MT5AccountSummary,
+  MT5PositionItem,
+  MT5DealItem,
+  MT5PositionPayload,
+  MT5DealPayload,
+  MT5SyncEvent,
+  MT5WebhookPayload,
+} from "../api/_lib/types.js";
 

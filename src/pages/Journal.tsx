@@ -422,15 +422,22 @@ export function Journal() {
                         </span>
                       )}
                     </div>
-                    <span
-                      className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${
-                        trade.accountMode === "real"
-                          ? "bg-emerald-50 text-emerald-700 border-emerald-200"
-                          : "bg-blue-50 text-blue-700 border-blue-200"
-                      }`}
-                    >
-                      {trade.accountMode}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {trade.source === "mt5_sync" && (
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
+                          MT5 Sync
+                        </span>
+                      )}
+                      <span
+                        className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${
+                          trade.accountMode === "real"
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : "bg-blue-50 text-blue-700 border-blue-200"
+                        }`}
+                      >
+                        {trade.accountMode}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between text-xs">
@@ -526,8 +533,15 @@ export function Journal() {
                             }`}
                           />
                           <div>
-                            <div className="font-bold text-sm text-zinc-900 font-display">
-                              {trade.asset}
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-sm text-zinc-900 font-display">
+                                {trade.asset}
+                              </span>
+                              {trade.source === "mt5_sync" && (
+                                <span className="text-[9px] font-semibold px-1 py-0.2 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
+                                  MT5 Sync
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-1.5 mt-0.5">
                               <span

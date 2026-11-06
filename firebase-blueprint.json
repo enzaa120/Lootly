@@ -66,7 +66,60 @@
             "createdAt": { "type": "string" },
             "updatedAt": { "type": "string" }
           }
+        },
+        "mt5Connectors": {
+          "description": "User MT5 connector instances and connection status",
+          "fields": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "tokenPrefix": { "type": "string" },
+            "tokenHash": { "type": "string" },
+            "status": { "type": "string" },
+            "broker": { "type": "string" },
+            "server": { "type": "string" },
+            "accountNumber": { "type": "string" },
+            "accountMode": { "type": "string" },
+            "balance": { "type": "number" },
+            "equity": { "type": "number" },
+            "openPositionsCount": { "type": "number" },
+            "revoked": { "type": "boolean" },
+            "lastSyncAt": { "type": "string" },
+            "createdAt": { "type": "string" },
+            "updatedAt": { "type": "string" }
+          }
+        },
+        "mt5Accounts": {
+          "description": "User MT5 trading account summaries and raw position/deal sync",
+          "fields": {
+            "accountKey": { "type": "string" },
+            "login": { "type": "string" },
+            "maskedLogin": { "type": "string" },
+            "broker": { "type": "string" },
+            "server": { "type": "string" },
+            "accountMode": { "type": "string" },
+            "currency": { "type": "string" },
+            "leverage": { "type": "number" },
+            "balance": { "type": "number" },
+            "equity": { "type": "number" },
+            "margin": { "type": "number" },
+            "freeMargin": { "type": "number" },
+            "openPositionsCount": { "type": "number" },
+            "lastSyncAt": { "type": "string" },
+            "updatedAt": { "type": "string" }
+          }
         }
+      }
+    },
+    "mt5ConnectorTokens": {
+      "description": "Global SHA-256 token mappings for authenticating MT5 webhook calls",
+      "fields": {
+        "tokenHash": { "type": "string" },
+        "userId": { "type": "string" },
+        "connectorId": { "type": "string" },
+        "name": { "type": "string" },
+        "revoked": { "type": "boolean" },
+        "lastUsedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
       }
     },
     "marketData": {
@@ -135,6 +188,23 @@
             "requestsH1": { "type": "number" },
             "totalRequests": { "type": "number" },
             "updatedAt": { "type": "number" }
+          }
+        },
+        "monitor": {
+          "description": "Background market monitor concurrency lock and state persistence",
+          "fields": {
+            "setupAnalysisId": { "type": "string" },
+            "previousState": { "type": "string" },
+            "currentState": { "type": "string" },
+            "direction": { "type": "string" },
+            "lastEvaluationAt": { "type": "string" },
+            "lastMarketTimestamp": { "type": "number" },
+            "preAlertSent": { "type": "boolean" },
+            "validAlertSent": { "type": "boolean" },
+            "locked": { "type": "boolean" },
+            "lockedAt": { "type": "number" },
+            "expiresAt": { "type": "number" },
+            "lockId": { "type": "string" }
           }
         }
       }

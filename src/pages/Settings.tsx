@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Target
 } from "lucide-react";
+import { MT5ConnectionSection } from "../components/settings/MT5ConnectionSection";
 
 export function Settings() {
   const { settings, updateSettings, resetAllData, importData, trades, transactions, accountMode } = useAppStore();
@@ -582,11 +583,14 @@ export function Settings() {
 
       </form>
 
-      {/* Block 4: Manajemen Data & Backup */}
+      {/* Block 4: Koneksi MetaTrader 5 (MT5 Direct Connector) */}
+      <MT5ConnectionSection />
+
+      {/* Block 5: Manajemen Data & Backup */}
       <div className="clean-card p-5 space-y-4">
         <h2 className="text-sm font-bold text-zinc-900 font-display flex items-center gap-2">
           <Database className="w-4 h-4 text-zinc-500" />
-          4. Manajemen Data & Backup
+          5. Manajemen Data & Backup
         </h2>
         <p className="text-xs text-zinc-500">
           Kelola cadangan data jurnal trading Anda. Ekspor secara berkala untuk menjaga riwayat trading Anda tetap aman.

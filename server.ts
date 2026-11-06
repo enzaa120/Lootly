@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import { processTradingViewWebhook } from "./api/_lib/tradingviewWebhook.js";
 import { getXauusdMarketData, getTwelveDataDiagnosticStatus } from "./api/_lib/twelveData.js";
+import { executeMarketMonitor } from "./api/_lib/marketMonitor.js";
 import {
   getPublicVapidKey,
   registerSubscription,
@@ -12,6 +13,8 @@ import {
   sendPushNotification,
   getSubscriptionsForUser,
 } from "./api/_lib/pushService.js";
+import mt5ConnectorsHandler from "./api/mt5/connectors.js";
+import mt5WebhookHandler from "./api/mt5/webhook.js";
 
 dotenv.config();
 
@@ -84,6 +87,58 @@ app.post("/api/tradingview-webhook", async (req, res) => {
       error: "Internal server error processing TradingView webhook.",
     });
   }
+});
+
+// Production Background Market Monitor for XAUUSD (triggered externally, e.g. cron-job.org)
+app.post("/api/monitor/xauusd", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+
+  const configuredSecret = process.env.MARKET_MONITOR_SECRET;
+  if (!configuredSecret) {
+    console.error("[Monitor] Server configuration error: MARKET_MONITOR_SECRET is not configured");
+    return res.status(500).json({
+      ok: false,
+      error: "Server configuration error: Monitor secret is missing in environment",
+    });
+  }
+
+  const rawAuthHeader = req.headers["authorization"] || req.headers["Authorization"];
+  const authHeader = Array.isArray(rawAuthHeader) ? rawAuthHeader[0] : rawAuthHeader;
+
+  // Header must strictly be: "Bearer <MARKET_MONITOR_SECRET>"
+  // Query parameter secrets are explicitly forbidden
+  if (!authHeader || authHeader !== `Bearer ${configuredSecret}`) {
+    return res.status(401).json({
+      ok: false,
+      error: "Unauthorized",
+    });
+  }
+
+  try {
+    const result = await executeMarketMonitor();
+    return res.status(200).json(result);
+  } catch (err: any) {
+    console.error("[Monitor] Unhandled execution error:", err);
+    return res.status(500).json({
+      ok: false,
+      error: "Internal server error during market monitoring execution",
+      evaluatedAt: new Date().toISOString(),
+    });
+  }
+});
+
+// ==============================================================================
+// METATRADER 5 (MT5) DIRECT CONNECTOR ENDPOINTS
+// ==============================================================================
+
+// MT5 Connector Management (GET, POST, DELETE)
+app.all("/api/mt5/connectors", async (req, res) => {
+  return mt5ConnectorsHandler(req as any, res as any);
+});
+
+// MT5 Webhook Endpoint (POST from Lootly_MT5_Connector.mq5)
+app.post("/api/mt5/webhook", async (req, res) => {
+  return mt5WebhookHandler(req as any, res as any);
 });
 
 // ==============================================================================
