@@ -457,25 +457,25 @@ string FormatDealJson(ulong ticket)
 {
    if(!HistoryDealSelect(ticket)) return "{}";
 
-   ulong order = HistoryDealGetInteger(DEAL_ORDER);
-   ulong position = HistoryDealGetInteger(DEAL_POSITION_ID);
+   ulong order = HistoryDealGetInteger(ticket, DEAL_ORDER);
+   ulong position = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
    if(position <= 0) position = ticket;
 
-   string symbol = HistoryDealGetString(DEAL_SYMBOL);
-   ENUM_DEAL_TYPE type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(DEAL_TYPE);
+   string symbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
+   ENUM_DEAL_TYPE type = (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE);
    string dir = (type == DEAL_TYPE_BUY) ? "buy" : (type == DEAL_TYPE_SELL) ? "sell" : "other";
-   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(DEAL_ENTRY);
+   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY);
    string entryStr = (entry == DEAL_ENTRY_IN) ? "in" : (entry == DEAL_ENTRY_OUT) ? "out" : (entry == DEAL_ENTRY_INOUT) ? "inout" : "out";
    
-   double volume = HistoryDealGetDouble(DEAL_VOLUME);
-   double price = HistoryDealGetDouble(DEAL_PRICE);
-   double profit = HistoryDealGetDouble(DEAL_PROFIT);
-   double commission = HistoryDealGetDouble(DEAL_COMMISSION);
-   double swap = HistoryDealGetDouble(DEAL_SWAP);
-   datetime dealTime = (datetime)HistoryDealGetInteger(DEAL_TIME);
-   long reason = HistoryDealGetInteger(DEAL_REASON);
-   string comment = HistoryDealGetString(DEAL_COMMENT);
-   long magic = HistoryDealGetInteger(DEAL_MAGIC);
+   double volume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
+   double price = HistoryDealGetDouble(ticket, DEAL_PRICE);
+   double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+   double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+   double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
+   datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+   long reason = HistoryDealGetInteger(ticket, DEAL_REASON);
+   string comment = HistoryDealGetString(ticket, DEAL_COMMENT);
+   long magic = HistoryDealGetInteger(ticket, DEAL_MAGIC);
 
    string json = "{";
    json += "\"ticket\":" + IntegerToString(ticket) + ",";
