@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { useAppStore, dedupeTrades } from "../store/AppContext";
 import { useNavigate } from "react-router-dom";
-import { formatIDR, formatPercent } from "../lib/utils";
+import { formatIDR, formatUSD, formatPercent } from "../lib/utils";
 import {
   Search,
   Plus,
@@ -22,7 +22,7 @@ import {
 import { Trade, AccountMode, TradeResult } from "../types";
 
 export function Journal() {
-  const { trades, accountMode, setAccountMode, deleteTrade, addTrade } = useAppStore();
+  const { trades, settings, accountMode, setAccountMode, displayCurrency, setDisplayCurrency, deleteTrade, addTrade } = useAppStore();
   const navigate = useNavigate();
 
   // Search & Filter States
@@ -138,9 +138,13 @@ export function Journal() {
     const wins = filteredTrades.filter((t) => t.result === "win").length;
     const losses = filteredTrades.filter((t) => t.result === "loss").length;
     const netPnl = filteredTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
+    const netPnlUsd = filteredTrades.reduce((acc, t) => {
+      if (t.status === "open") return acc + (t.floatingProfitUsd || 0);
+      return acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)));
+    }, 0);
     const winRate = total > 0 ? (wins / total) * 100 : 0;
-    return { total, wins, losses, netPnl, winRate };
-  }, [filteredTrades]);
+    return { total, wins, losses, netPnl, netPnlUsd, winRate };
+  }, [filteredTrades, settings.usdToIdr]);
 
   // Duplicate handler
   const handleDuplicate = (e: React.MouseEvent, trade: Trade) => {
@@ -252,6 +256,24 @@ export function Journal() {
               </button>
             ))}
           </div>
+          {/* Currency Switcher */}
+          <div className="flex items-center bg-zinc-100 p-0.5 rounded-xl border border-zinc-200 shrink-0">
+            {(["USD", "IDR"] as const).map((curr) => (
+              <button
+                key={curr}
+                type="button"
+                onClick={() => setDisplayCurrency(curr)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold uppercase transition-all cursor-pointer ${
+                  displayCurrency === curr
+                    ? "bg-white text-emerald-700 shadow-xs font-extrabold"
+                    : "text-zinc-500 hover:text-zinc-800"
+                }`}
+                title={`Tampilkan nominal dalam ${curr}`}
+              >
+                {curr}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Secondary Filter Controls: Result, Asset, Date Range, Sort */}
@@ -283,11 +305,14 @@ export function Journal() {
               <option value="all">Semua Pair</option>
               <option value="XAU/USD">XAU/USD (Gold)</option>
               <option value="BTC/USD">BTC/USD (Bitcoin)</option>
+              <option value="NAS100">NAS100 (Nasdaq)</option>
+              <option value="SP100">SP100 (S&P 100)</option>
+              <option value="US500">US500 (S&P 500)</option>
               <option value="EUR/USD">EUR/USD</option>
               <option value="GBP/USD">GBP/USD</option>
               <option value="USD/JPY">USD/JPY</option>
               {uniqueAssets
-                .filter((a) => !["XAU/USD", "BTC/USD", "EUR/USD", "GBP/USD", "USD/JPY"].includes(a))
+                .filter((a) => !["XAU/USD", "BTC/USD", "NAS100", "SP100", "US500", "EUR/USD", "GBP/USD", "USD/JPY"].includes(a))
                 .map((asset) => (
                   <option key={asset} value={asset}>{asset}</option>
                 ))}
@@ -339,8 +364,10 @@ export function Journal() {
             <span>•</span>
             <span>
               Net P/L:{" "}
-              <strong className={filteredSummary.netPnl >= 0 ? "text-emerald-600" : "text-rose-600"}>
-                {formatIDR(filteredSummary.netPnl, true)}
+              <strong className={(displayCurrency === "USD" ? filteredSummary.netPnlUsd : filteredSummary.netPnl) >= 0 ? "text-emerald-600" : "text-rose-600"}>
+                {displayCurrency === "USD"
+                  ? formatUSD(filteredSummary.netPnlUsd, true)
+                  : formatIDR(filteredSummary.netPnl, true)}
               </strong>
             </span>
           </div>
@@ -446,12 +473,29 @@ export function Journal() {
                       {trade.session && <span className="ml-1 text-zinc-400">({trade.session})</span>}
                     </div>
                     <div className="text-right font-mono">
-                      <div className={`font-bold text-sm ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-800"}`}>
-                        {formatIDR(trade.pnlIdr || 0, true)}
-                      </div>
-                      <div className={`text-[11px] font-medium ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-500"}`}>
-                        {formatPercent(trade.pnlPercent || 0, true)}
-                      </div>
+                      {trade.status === "open" ? (
+                        <div>
+                          <div className="text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 inline-block">
+                            {trade.floatingProfitUsd !== undefined && trade.floatingProfitUsd !== 0
+                              ? (displayCurrency === "USD"
+                                  ? formatUSD(trade.floatingProfitUsd, true)
+                                  : formatIDR(Math.round(trade.floatingProfitUsd * (settings.usdToIdr || 15800)), true))
+                              : "Running"}
+                          </div>
+                          <div className="text-[10px] text-blue-500 font-semibold mt-0.5">Posisi Aktif</div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className={`font-bold text-sm ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-800"}`}>
+                            {displayCurrency === "USD"
+                              ? formatUSD(trade.pnlUsd !== undefined ? trade.pnlUsd : ((trade.pnlIdr || 0) / (settings.usdToIdr || 15800)), true)
+                              : formatIDR(trade.pnlIdr || 0, true)}
+                          </div>
+                          <div className={`text-[11px] font-medium ${isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-500"}`}>
+                            {formatPercent(trade.pnlPercent || 0, true)}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -508,7 +552,7 @@ export function Journal() {
                   <th className="py-3 px-3 font-semibold uppercase tracking-wider">Akun</th>
                   <th className="py-3 px-3 font-semibold uppercase tracking-wider">Setup & Catatan</th>
                   <th className="py-3 px-3 font-semibold uppercase tracking-wider text-center">RR</th>
-                  <th className="py-3 px-4 font-semibold uppercase tracking-wider text-right">Hasil (IDR & %)</th>
+                  <th className="py-3 px-4 font-semibold uppercase tracking-wider text-right">Hasil ({displayCurrency} & %)</th>
                   <th className="py-3 px-3 text-right">Aksi</th>
                 </tr>
               </thead>
@@ -603,22 +647,42 @@ export function Journal() {
                         </span>
                       </td>
 
-                      {/* P/L Result (Nominal IDR & %) */}
+                      {/* P/L Result (Nominal & %) */}
                       <td className="py-3.5 px-4 text-right">
-                        <div
-                          className={`font-mono font-bold text-sm ${
-                            isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-700"
-                          }`}
-                        >
-                          {formatIDR(trade.pnlIdr || 0, true)}
-                        </div>
-                        <div
-                          className={`font-mono text-xs font-semibold ${
-                            isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-500"
-                          }`}
-                        >
-                          {formatPercent(trade.pnlPercent || 0, true)}
-                        </div>
+                        {trade.status === "open" ? (
+                          <div>
+                            <div className="inline-flex items-center gap-1 font-mono font-bold text-xs text-blue-700 bg-blue-50 px-2.5 py-1 rounded-md border border-blue-200">
+                              <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                              <span>
+                                {trade.floatingProfitUsd !== undefined && trade.floatingProfitUsd !== 0
+                                  ? (displayCurrency === "USD"
+                                      ? formatUSD(trade.floatingProfitUsd, true)
+                                      : formatIDR(Math.round(trade.floatingProfitUsd * (settings.usdToIdr || 15800)), true))
+                                  : "Running"}
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-zinc-400 mt-0.5 font-sans">Sedang Berjalan</div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div
+                              className={`font-mono font-bold text-sm ${
+                                isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-700"
+                              }`}
+                            >
+                              {displayCurrency === "USD"
+                                ? formatUSD(trade.pnlUsd !== undefined ? trade.pnlUsd : ((trade.pnlIdr || 0) / (settings.usdToIdr || 15800)), true)
+                                : formatIDR(trade.pnlIdr || 0, true)}
+                            </div>
+                            <div
+                              className={`font-mono text-xs font-semibold ${
+                                isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-500"
+                              }`}
+                            >
+                              {formatPercent(trade.pnlPercent || 0, true)}
+                            </div>
+                          </div>
+                        )}
                       </td>
 
                       {/* Actions */}

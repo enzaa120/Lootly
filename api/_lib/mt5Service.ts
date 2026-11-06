@@ -56,8 +56,20 @@ export function normalizeSymbol(rawSymbol: string): string {
 
   // Common gold symbols
   if (clean.startsWith("XAUUSD") || clean === "GOLD") return "XAU/USD";
-  if (clean.startsWith("BTCUSD") || clean === "BITCOIN") return "BTC/USD";
-  if (clean.startsWith("ETHUSD") || clean === "ETHEREUM") return "ETH/USD";
+
+  // Common crypto symbols
+  if (clean.startsWith("BTC") || clean === "BITCOIN") return "BTC/USD";
+  if (clean.startsWith("ETH") || clean === "ETHEREUM") return "ETH/USD";
+  if (clean.startsWith("SOL") || clean === "SOLANA") return "SOL/USD";
+
+  // Common Index symbols (do NOT slash indices like NAS/100 or SP/100)
+  if (clean.includes("NAS100") || clean.includes("US100") || clean.includes("USTEC") || clean.includes("NDX")) return "NAS100";
+  if (clean.includes("SP100")) return "SP100";
+  if (clean.includes("SP500") || clean.includes("US500") || clean.includes("SPX")) return "US500";
+  if (clean.includes("US30") || clean.includes("DJ30") || clean.includes("DOW") || clean.includes("WALLSTREET")) return "US30";
+  if (clean.includes("GER40") || clean.includes("DAX")) return "DAX40";
+
+  // Forex pairs
   if (clean.startsWith("EURUSD")) return "EUR/USD";
   if (clean.startsWith("GBPUSD")) return "GBP/USD";
   if (clean.startsWith("USDJPY")) return "USD/JPY";
@@ -66,12 +78,12 @@ export function normalizeSymbol(rawSymbol: string): string {
   if (clean.startsWith("USDCHF")) return "USD/CHF";
   if (clean.startsWith("NZDUSD")) return "NZD/USD";
 
-  // General 6-char currency pair
-  if (clean.length === 6) {
+  // General 6-char currency pair (letters only, e.g. EURGBP)
+  if (clean.length === 6 && !/\d/.test(clean)) {
     return `${clean.substring(0, 3)}/${clean.substring(3, 6)}`;
   }
 
-  return rawSymbol;
+  return rawSymbol.trim();
 }
 
 /**
@@ -336,11 +348,17 @@ export async function processMT5Webhook(
   let processedDeals = 0;
   let processedEvents = 0;
 
+  const currentOpenTicketSet = new Set<string>();
+
   // 5. Reconcile Open Positions
   if (Array.isArray(payload.reconciliation?.openPositions)) {
     for (const pos of payload.reconciliation.openPositions) {
-      const positionIdentifier = pos.identifier || pos.ticket;
-      if (!positionIdentifier) continue;
+      const uniqueTicket = pos.ticket || pos.identifier;
+      if (!uniqueTicket) continue;
+      const positionIdentifier = pos.identifier || uniqueTicket;
+
+      currentOpenTicketSet.add(String(uniqueTicket));
+      currentOpenTicketSet.add(String(positionIdentifier));
 
       const symbol = normalizeSymbol(pos.symbol);
       const direction: "buy" | "sell" =
@@ -366,10 +384,10 @@ export async function processMT5Webhook(
         "mt5Accounts",
         accountKey,
         "positions",
-        String(positionIdentifier)
+        String(uniqueTicket)
       );
       const positionItem: MT5PositionItem = {
-        ticket: pos.ticket,
+        ticket: uniqueTicket,
         identifier: positionIdentifier,
         symbol,
         direction,
@@ -388,12 +406,14 @@ export async function processMT5Webhook(
       await setDoc(posDocRef, sanitizeFirestorePayload(positionItem), { merge: true });
 
       // B. Create/Update primary Trade in users/{uid}/trades/{tradeId}
-      const tradeId = `mt5_${loginStr}_${positionIdentifier}`;
+      // Using uniqueTicket guarantees multi-layer positions never overwrite each other!
+      const tradeId = `mt5_${loginStr}_${uniqueTicket}`;
       const tradeDocRef = doc(db, "users", userId, "trades", tradeId);
       const existingTradeSnap = await getDoc(tradeDocRef);
 
       const tradeDate = openTimeIso.split("T")[0];
       const tradeTime = openTimeIso.split("T")[1]?.substring(0, 5) || "00:00";
+      const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("SOL");
 
       if (!existingTradeSnap.exists()) {
         // New Open Trade
@@ -401,7 +421,7 @@ export async function processMT5Webhook(
           id: tradeId,
           userId,
           accountMode,
-          marketType: symbol.includes("BTC") || symbol.includes("ETH") ? "crypto" : "forex",
+          marketType: isCrypto ? "crypto" : "forex",
           status: "open",
           result: "open",
           date: tradeDate,
@@ -414,17 +434,21 @@ export async function processMT5Webhook(
           actualSL: sl > 0 ? sl : null,
           actualTP: tp > 0 ? tp : null,
           pnlIdr: 0,
+          pnlUsd: profitUsd,
+          floatingProfitUsd: profitUsd,
+          swap: swapUsd,
           pnlPercent: 0,
           rrPlanned: 0,
           rrRealized: 0,
           setupType: "Valetax MT5",
-          entryReason: `Eksekusi otomatis Valetax MT5 #${positionIdentifier}`,
+          entryReason: `Eksekusi otomatis Valetax MT5 #${uniqueTicket}`,
           mistakes: [],
           source: "mt5_sync",
           broker,
           mt5Server: server,
           accountNumber: maskedLogin,
-          mt5PositionTicket: positionIdentifier,
+          mt5PositionTicket: uniqueTicket,
+          mt5PositionIdentifier: positionIdentifier,
           magicNumber: pos.magic || null,
           comment: pos.comment || null,
           createdAt: openTimeIso,
@@ -432,9 +456,12 @@ export async function processMT5Webhook(
         };
         await setDoc(tradeDocRef, sanitizeFirestorePayload(newTradePayload), { merge: true });
       } else {
-        // Existing trade: Update modifications (SL, TP, remaining volume)
+        // Existing trade: Update modifications & current floating profit
         const updatePayload: Record<string, any> = {
           lot,
+          pnlUsd: profitUsd,
+          floatingProfitUsd: profitUsd,
+          swap: swapUsd,
           updatedAt: now,
         };
         if (sl > 0) updatePayload.actualSL = sl;
@@ -446,170 +473,291 @@ export async function processMT5Webhook(
     }
   }
 
-  // 6. Reconcile Recent Closed Deals
+  // Gather all deals from both reconciliation.recentDeals and real-time events
+  const combinedDealsMap = new Map<string, MT5DealPayload>();
+
   if (Array.isArray(payload.reconciliation?.recentDeals)) {
-    for (const deal of payload.reconciliation.recentDeals) {
-      const dealTicket = deal.ticket;
-      const positionIdentifier = deal.position;
-      if (!dealTicket || !positionIdentifier) continue;
+    for (const d of payload.reconciliation.recentDeals) {
+      if (d && d.ticket) combinedDealsMap.set(String(d.ticket), d);
+    }
+  }
 
-      const symbol = normalizeSymbol(deal.symbol);
-      const direction: "buy" | "sell" =
-        deal.type === 0 || deal.type === "buy" ? "buy" : "sell";
-      const lot = deal.volume || 0;
-      const price = deal.price || 0;
-      const profitUsd = deal.profit || 0;
-      const commissionUsd = deal.commission || 0;
-      const swapUsd = deal.swap || 0;
-      const entryTypeStr =
-        deal.entry === 1 || deal.entry === "out"
-          ? "out"
-          : deal.entry === 2 || deal.entry === "inout"
-          ? "inout"
-          : deal.entry === 0 || deal.entry === "in"
-          ? "in"
-          : "out";
-
-      const dealTimeIso = deal.time
-        ? typeof deal.time === "number"
-          ? new Date(deal.time * 1000).toISOString()
-          : new Date(deal.time).toISOString()
-        : now;
-
-      // Store deal record in mt5Accounts subcollection
-      const dealDocRef = doc(
-        db,
-        "users",
-        userId,
-        "mt5Accounts",
-        accountKey,
-        "deals",
-        String(dealTicket)
-      );
-      const dealItem: MT5DealItem = {
-        dealTicket,
-        orderTicket: deal.order,
-        positionIdentifier,
-        symbol,
-        direction,
-        volume: lot,
-        price,
-        profit: profitUsd,
-        commission: commissionUsd,
-        swap: swapUsd,
-        time: dealTimeIso,
-        entryType: entryTypeStr as any,
-        reason: String(deal.reason || ""),
-        comment: deal.comment,
-        magic: deal.magic || null,
-        createdAt: now,
-      };
-      await setDoc(dealDocRef, sanitizeFirestorePayload(dealItem), { merge: true });
-
-      // If deal is an exit deal (entry === 1 / out / inout), close or finalize the trade
-      if (entryTypeStr === "out" || entryTypeStr === "inout") {
-        const tradeId = `mt5_${loginStr}_${positionIdentifier}`;
-        const tradeDocRef = doc(db, "users", userId, "trades", tradeId);
-        const existingTradeSnap = await getDoc(tradeDocRef);
-
-        const netProfitUsd = profitUsd + commissionUsd + swapUsd;
-        const pnlIdr = Math.round(netProfitUsd * usdToIdr);
-        const tradeResult = netProfitUsd > 0.05 ? "win" : netProfitUsd < -0.05 ? "loss" : "breakeven";
-
-        if (existingTradeSnap.exists()) {
-          const prev = existingTradeSnap.data();
-          const entryPrice = prev?.actualEntry || price;
-          let calculatedRR = 0;
-          if (prev?.actualSL && Math.abs(entryPrice - prev.actualSL) > 0) {
-            calculatedRR = Number((Math.abs(price - entryPrice) / Math.abs(entryPrice - prev.actualSL)).toFixed(2));
+  if (Array.isArray(payload.events)) {
+    for (const ev of payload.events) {
+      processedEvents++;
+      if (ev.type === "deal" && ev.data) {
+        try {
+          const dealObj: MT5DealPayload = typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+          if (dealObj && dealObj.ticket) {
+            combinedDealsMap.set(String(dealObj.ticket), dealObj);
           }
+        } catch (e) {
+          console.warn("[MT5 Sync] Failed to parse event deal data:", e);
+        }
+      }
+    }
+  }
+
+  const combinedDeals = Array.from(combinedDealsMap.values());
+
+  // 6. Reconcile Closed Deals
+  for (const deal of combinedDeals) {
+    const dealTicket = deal.ticket;
+    const positionIdentifier = deal.position || dealTicket;
+    if (!dealTicket) continue;
+
+    const symbol = normalizeSymbol(deal.symbol);
+    const direction: "buy" | "sell" =
+      deal.type === 0 || deal.type === "buy" ? "buy" : "sell";
+    const lot = deal.volume || 0;
+    const price = deal.price || 0;
+    const profitUsd = deal.profit || 0;
+    const commissionUsd = deal.commission || 0;
+    const swapUsd = deal.swap || 0;
+    const entryTypeStr =
+      deal.entry === 1 || deal.entry === "out"
+        ? "out"
+        : deal.entry === 2 || deal.entry === "inout"
+        ? "inout"
+        : deal.entry === 0 || deal.entry === "in"
+        ? "in"
+        : "out";
+
+    const dealTimeIso = deal.time
+      ? typeof deal.time === "number"
+        ? new Date(deal.time * 1000).toISOString()
+        : new Date(deal.time).toISOString()
+      : now;
+
+    // Store deal record in mt5Accounts subcollection
+    const dealDocRef = doc(
+      db,
+      "users",
+      userId,
+      "mt5Accounts",
+      accountKey,
+      "deals",
+      String(dealTicket)
+    );
+    const dealItem: MT5DealItem = {
+      dealTicket,
+      orderTicket: deal.order,
+      positionIdentifier,
+      symbol,
+      direction,
+      volume: lot,
+      price,
+      profit: profitUsd,
+      commission: commissionUsd,
+      swap: swapUsd,
+      time: dealTimeIso,
+      entryType: entryTypeStr as any,
+      reason: String(deal.reason || ""),
+      comment: deal.comment,
+      magic: deal.magic || null,
+      createdAt: now,
+    };
+    await setDoc(dealDocRef, sanitizeFirestorePayload(dealItem), { merge: true });
+
+    // If deal is an exit deal, finalize and close the matching Trade
+    if (entryTypeStr === "out" || entryTypeStr === "inout") {
+      const netProfitUsd = Number((profitUsd + commissionUsd + swapUsd).toFixed(2));
+      const pnlIdr = Math.round(netProfitUsd * usdToIdr);
+      const tradeResult = netProfitUsd > 0.05 ? "win" : netProfitUsd < -0.05 ? "loss" : "breakeven";
+
+      // Try locating by position ticket, identifier, or order ticket
+      const possibleTradeIds = [
+        `mt5_${loginStr}_${positionIdentifier}`,
+        deal.order ? `mt5_${loginStr}_${deal.order}` : null,
+      ].filter(Boolean) as string[];
+
+      let matchedTradeDocRef = null;
+      let matchedTradeData: any = null;
+
+      for (const tId of possibleTradeIds) {
+        const trRef = doc(db, "users", userId, "trades", tId);
+        const trSnap = await getDoc(trRef);
+        if (trSnap.exists()) {
+          matchedTradeDocRef = trRef;
+          matchedTradeData = trSnap.data();
+          break;
+        }
+      }
+
+      const targetTradeRef = matchedTradeDocRef || doc(db, "users", userId, "trades", possibleTradeIds[0]);
+
+      if (matchedTradeData) {
+        const entryPrice = matchedTradeData.actualEntry || price;
+        let calculatedRR = 0;
+        if (matchedTradeData.actualSL && Math.abs(entryPrice - matchedTradeData.actualSL) > 0) {
+          calculatedRR = Number(
+            (Math.abs(price - entryPrice) / Math.abs(entryPrice - matchedTradeData.actualSL)).toFixed(2)
+          );
+        }
+
+        await setDoc(
+          targetTradeRef,
+          sanitizeFirestorePayload({
+            status: "closed",
+            result: tradeResult,
+            actualExit: price,
+            pnlIdr,
+            pnlUsd: netProfitUsd,
+            floatingProfitUsd: 0,
+            commission: commissionUsd,
+            swap: swapUsd,
+            rrRealized: calculatedRR,
+            mt5DealTicket: dealTicket,
+            closeTime: dealTimeIso,
+            updatedAt: now,
+          }),
+          { merge: true }
+        );
+
+        // Add transaction to users/{uid}/transactions idempotently
+        const txDocRef = doc(db, "users", userId, "transactions", `tx_${targetTradeRef.id}`);
+        await setDoc(
+          txDocRef,
+          sanitizeFirestorePayload({
+            id: `tx_${targetTradeRef.id}`,
+            userId,
+            accountMode,
+            type: "trade_pnl",
+            amount: pnlIdr,
+            amountUsd: netProfitUsd,
+            note: `${symbol} (${direction.toUpperCase()}) - ${tradeResult.toUpperCase()}`,
+            date: dealTimeIso.split("T")[0],
+            relatedTradeId: targetTradeRef.id,
+          }),
+          { merge: true }
+        );
+      } else {
+        // Trade was not in database (e.g. opened before connector was active)
+        const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("SOL");
+        await setDoc(
+          targetTradeRef,
+          sanitizeFirestorePayload({
+            id: targetTradeRef.id,
+            userId,
+            accountMode,
+            marketType: isCrypto ? "crypto" : "forex",
+            status: "closed",
+            result: tradeResult,
+            date: dealTimeIso.split("T")[0],
+            time: dealTimeIso.split("T")[1]?.substring(0, 5) || "00:00",
+            asset: symbol,
+            direction,
+            lot,
+            actualEntry: price,
+            actualExit: price,
+            pnlIdr,
+            pnlUsd: netProfitUsd,
+            floatingProfitUsd: 0,
+            commission: commissionUsd,
+            swap: swapUsd,
+            rrPlanned: 0,
+            rrRealized: 0,
+            setupType: "Valetax MT5",
+            entryReason: `Eksekusi Valetax MT5 #${positionIdentifier}`,
+            mistakes: [],
+            source: "mt5_sync",
+            broker,
+            mt5Server: server,
+            accountNumber: maskedLogin,
+            mt5PositionTicket: positionIdentifier,
+            mt5DealTicket: dealTicket,
+            createdAt: dealTimeIso,
+            closeTime: dealTimeIso,
+            updatedAt: now,
+          }),
+          { merge: true }
+        );
+      }
+    }
+
+    processedDeals++;
+  }
+
+  // 7. Auto-close trades that are no longer active in MT5
+  // If an open trade exists in Lootly for this account but is absent from currentOpenTickets,
+  // it has been closed in MT5. We match with recent deals or mark it closed immediately.
+  try {
+    const openTradesQuery = query(
+      collection(db, "users", userId, "trades"),
+      where("source", "==", "mt5_sync"),
+      where("status", "==", "open"),
+      where("accountNumber", "==", maskedLogin)
+    );
+    const openTradesSnap = await getDocs(openTradesQuery);
+
+    for (const tDoc of openTradesSnap.docs) {
+      const tr = tDoc.data();
+      const posTicketStr = String(tr.mt5PositionTicket || "");
+      const posIdStr = String(tr.mt5PositionIdentifier || "");
+
+      // If position is not in MT5 open positions anymore, it is closed!
+      const isStillOpen = currentOpenTicketSet.has(posTicketStr) || currentOpenTicketSet.has(posIdStr);
+      if (!isStillOpen && currentOpenTicketSet.size >= 0) {
+        // Find matching exit deal
+        const matchingDeal = combinedDeals.find(
+          (d) =>
+            (String(d.position) === posTicketStr ||
+              String(d.position) === posIdStr ||
+              String(d.order) === posTicketStr) &&
+            (d.entry === 1 || d.entry === "out" || d.entry === 2 || d.entry === "inout")
+        );
+
+        if (matchingDeal) {
+          const profitUsd = matchingDeal.profit || 0;
+          const commUsd = matchingDeal.commission || 0;
+          const swapUsd = matchingDeal.swap || 0;
+          const netUsd = Number((profitUsd + commUsd + swapUsd).toFixed(2));
+          const pnlIdr = Math.round(netUsd * usdToIdr);
+          const tradeResult = netUsd > 0.05 ? "win" : netUsd < -0.05 ? "loss" : "breakeven";
 
           await setDoc(
-            tradeDocRef,
+            tDoc.ref,
             sanitizeFirestorePayload({
               status: "closed",
               result: tradeResult,
-              actualExit: price,
+              actualExit: matchingDeal.price || tr.actualEntry,
+              pnlUsd: netUsd,
               pnlIdr,
-              pnlUsd: netProfitUsd,
-              commission: commissionUsd,
+              floatingProfitUsd: 0,
+              commission: commUsd,
               swap: swapUsd,
-              rrRealized: calculatedRR,
-              mt5DealTicket: dealTicket,
-              closeTime: dealTimeIso,
+              mt5DealTicket: matchingDeal.ticket,
+              closeTime: now,
               updatedAt: now,
             }),
             { merge: true }
           );
-
-          // Add transaction to users/{uid}/transactions idempotently
-          const txDocRef = doc(db, "users", userId, "transactions", `tx_${tradeId}`);
-          await setDoc(
-            txDocRef,
-            sanitizeFirestorePayload({
-              id: `tx_${tradeId}`,
-              userId,
-              accountMode,
-              type: "trade_pnl",
-              amount: pnlIdr,
-              note: `${symbol} (${direction.toUpperCase()}) - ${tradeResult.toUpperCase()}`,
-              date: dealTimeIso.split("T")[0],
-              relatedTradeId: tradeId,
-            }),
-            { merge: true }
-          );
         } else {
-          // Trade was not in database (historical import or missed open event)
+          // Deal not found yet, mark closed with last known floating profit
+          const floatUsd = tr.floatingProfitUsd || tr.pnlUsd || 0;
+          const netUsd = Number(floatUsd.toFixed(2));
+          const pnlIdr = Math.round(netUsd * usdToIdr);
+          const tradeResult = netUsd > 0.05 ? "win" : netUsd < -0.05 ? "loss" : "breakeven";
+
           await setDoc(
-            tradeDocRef,
+            tDoc.ref,
             sanitizeFirestorePayload({
-              id: tradeId,
-              userId,
-              accountMode,
-              marketType: symbol.includes("BTC") || symbol.includes("ETH") ? "crypto" : "forex",
               status: "closed",
               result: tradeResult,
-              date: dealTimeIso.split("T")[0],
-              time: dealTimeIso.split("T")[1]?.substring(0, 5) || "00:00",
-              asset: symbol,
-              direction,
-              lot,
-              actualEntry: price,
-              actualExit: price,
+              actualExit: tr.actualEntry,
+              pnlUsd: netUsd,
               pnlIdr,
-              pnlUsd: netProfitUsd,
-              commission: commissionUsd,
-              swap: swapUsd,
-              rrPlanned: 0,
-              rrRealized: 0,
-              setupType: "Valetax MT5",
-              entryReason: `Eksekusi Valetax MT5 #${positionIdentifier}`,
-              mistakes: [],
-              source: "mt5_sync",
-              broker,
-              mt5Server: server,
-              accountNumber: maskedLogin,
-              mt5PositionTicket: positionIdentifier,
-              mt5DealTicket: dealTicket,
-              createdAt: dealTimeIso,
-              closeTime: dealTimeIso,
+              floatingProfitUsd: 0,
+              closeTime: now,
               updatedAt: now,
             }),
             { merge: true }
           );
         }
       }
-
-      processedDeals++;
     }
-  }
-
-  // 7. Process Real-Time Transaction Events
-  if (Array.isArray(payload.events)) {
-    for (const ev of payload.events) {
-      processedEvents++;
-      // Event handling is handled seamlessly via reconciliation data
-    }
+  } catch (reconcileErr) {
+    console.warn("[MT5 Sync] Open trade reconciliation notice:", reconcileErr);
   }
 
   return {

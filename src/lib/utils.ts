@@ -41,6 +41,22 @@ export function formatIDR(amount: number, showSign: boolean = false): string {
   return `Rp ${formattedAbs}`;
 }
 
+/**
+ * Format number to US Dollar (USD)
+ * Examples: $0.00, +$14.50, -$5.20, $1,250.00
+ */
+export function formatUSD(amount: number, showSign: boolean = false): string {
+  if (isNaN(amount) || amount === null || amount === undefined) return "$0.00";
+  const isNegative = amount < 0;
+  const abs = Math.abs(amount).toFixed(2);
+  const parts = abs.split(".");
+  const formattedInt = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  const formatted = `$${formattedInt}.${parts[1]}`;
+  if (isNegative) return `-${formatted}`;
+  if (showSign && amount > 0) return `+${formatted}`;
+  return formatted;
+}
+
 export function formatPercent(percent: number, showSign: boolean = true): string {
   if (isNaN(percent) || percent === null || percent === undefined) return "0%";
   const formatted = Math.abs(percent).toFixed(1).replace(/\.0$/, "");

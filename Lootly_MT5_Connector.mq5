@@ -165,6 +165,7 @@ void OnTimer()
 void EnqueueDealEvent(ulong dealTicket)
 {
    if(dealTicket <= 0) return;
+   HistorySelect(TimeCurrent() - 86400, TimeCurrent() + 86400);
    if(!HistoryDealSelect(dealTicket)) return;
 
    string eventId = "deal_" + IntegerToString(dealTicket);
@@ -173,9 +174,12 @@ void EnqueueDealEvent(ulong dealTicket)
    string json = FormatDealJson(dealTicket);
    AddEventToQueue(eventId, "deal", json);
 
+   // Instantly flush to ensure immediate update in Lootly
+   FlushEventQueue();
+
    if(InpVerboseLog)
    {
-      Print("[Lootly MT5] Deal enqueued: #", dealTicket);
+      Print("[Lootly MT5] Deal enqueued & flushed: #", dealTicket);
    }
 }
 
@@ -282,7 +286,7 @@ void FlushEventQueue()
 //+------------------------------------------------------------------+
 void SendHeartbeatSnapshot()
 {
-   string payload = BuildFullPayload("[]", BuildPositionsJson(), "[]");
+   string payload = BuildFullPayload("[]", BuildPositionsJson(), BuildRecentDealsJson());
    SendLootlyPayload(payload);
 }
 
@@ -424,8 +428,8 @@ string FormatPositionJson(ulong ticket)
 //+------------------------------------------------------------------+
 string BuildRecentDealsJson()
 {
-   datetime toDate = TimeCurrent();
-   datetime fromDate = toDate - (7 * 86400); // Past 7 days
+   datetime toDate = TimeCurrent() + 86400; // Include deals up to current second
+   datetime fromDate = TimeCurrent() - (7 * 86400); // Past 7 days
 
    HistorySelect(fromDate, toDate);
    int totalDeals = HistoryDealsTotal();

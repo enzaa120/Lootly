@@ -116,11 +116,13 @@ interface AppState {
   userProfile: UserProfile | null;
   isCloudSynced: boolean;
   isAuthLoading: boolean;
+  displayCurrency: "USD" | "IDR";
 }
 
 interface AppContextType extends AppState {
   setAccountMode: (mode: AccountMode) => void;
   setSelectedAsset: (asset: AssetType) => void;
+  setDisplayCurrency: (currency: "USD" | "IDR") => void;
   updateSettings: (newSettings: Partial<TradeSettings>) => Promise<void>;
   addTrade: (trade: Omit<Trade, "id" | "createdAt" | "updatedAt"> & { id?: string }) => Promise<string>;
   updateTrade: (id: string, trade: Partial<Trade>) => Promise<void>;
@@ -143,9 +145,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   
   const [accountMode, setAccountModeState] = useState<AccountMode>("demo");
   const [selectedAsset, setSelectedAssetState] = useState<AssetType>("XAU/USD");
+  const [displayCurrency, setDisplayCurrencyState] = useState<"USD" | "IDR">(() => {
+    return (localStorage.getItem("lootly.currency") as "USD" | "IDR") || "USD";
+  });
   const [settings, setSettings] = useState<TradeSettings>(defaultSettings);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+
+  const setDisplayCurrency = (curr: "USD" | "IDR") => {
+    setDisplayCurrencyState(curr);
+    localStorage.setItem("lootly.currency", curr);
+  };
 
   // 1. Initial Local Fallback Hydration
   useEffect(() => {
@@ -463,8 +473,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         userProfile,
         isCloudSynced,
         isAuthLoading,
+        displayCurrency,
         setAccountMode,
         setSelectedAsset,
+        setDisplayCurrency,
         updateSettings,
         addTrade,
         updateTrade,
