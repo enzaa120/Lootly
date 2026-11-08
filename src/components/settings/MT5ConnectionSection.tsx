@@ -19,6 +19,8 @@ import {
   CheckCircle2,
   Clock,
   Activity,
+  Pencil,
+  X,
 } from "lucide-react";
 import type { MT5ConnectorInfo } from "../../types";
 
@@ -33,11 +35,44 @@ export function MT5ConnectionSection() {
   const [copiedToken, setCopiedToken] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [editingConnectorId, setEditingConnectorId] = useState<string | null>(null);
+  const [editConnectorName, setEditConnectorName] = useState<string>("");
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleUpdateName = async (connectorId: string) => {
+    if (!user || !editConnectorName.trim()) return;
+    setIsUpdatingName(true);
+    try {
+      const idToken = await user.getIdToken();
+      const res = await fetch("/api/mt5/connectors", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ id: connectorId, name: editConnectorName.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setConnectors((prev) =>
+          prev.map((c) => (c.id === connectorId ? { ...c, name: editConnectorName.trim() } : c))
+        );
+        setEditingConnectorId(null);
+        showToast("Nama konektor berhasil diperbarui.");
+      } else {
+        showToast(data.error || "Gagal mengubah nama konektor.");
+      }
+    } catch (err: any) {
+      showToast(err?.message || "Terjadi kesalahan.");
+    } finally {
+      setIsUpdatingName(false);
+    }
   };
 
   // Fetch user's MT5 connectors
@@ -177,15 +212,15 @@ export function MT5ConnectionSection() {
               <Server className="w-4 h-4" />
             </div>
             <h2 className="text-sm font-bold text-zinc-900 font-display">
-              Koneksi MetaTrader 5 (Valetax & Windows VPS)
+              Koneksi MetaTrader 5 Multi-Broker (Valetax, Exness, HFM & Lainnya)
             </h2>
-            <span className="px-2 py-0.5 text-[10px] font-semibold bg-zinc-100 text-zinc-700 rounded-full border border-zinc-200">
-              Read-Only
+            <span className="px-2 py-0.5 text-[10px] font-semibold bg-emerald-50 text-emerald-700 rounded-full border border-emerald-200">
+              Multi-Terminal
             </span>
           </div>
           <p className="text-xs text-zinc-500 mt-1 max-w-2xl leading-relaxed">
-            Trading tetap dari HP (iPhone/Android). Terminal MT5 Desktop di Windows VPS Anda akan secara otomatis
-            menyinkronkan posisi buka, modifikasi SL/TP, dan deal yang ditutup ke jurnal Lootly.
+            Trading dari HP di broker mana saja (Valetax, Exness, HFM). Pasang EA di masing-masing terminal MT5 Windows Anda,
+            dan seluruh transaksi otomatis tersinkron ke jurnal Lootly dengan label broker masing-masing.
           </p>
         </div>
 
@@ -309,7 +344,56 @@ export function MT5ConnectionSection() {
                       />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="font-bold text-xs text-zinc-900">{connector.name}</span>
+                          {editingConnectorId === connector.id ? (
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={editConnectorName}
+                                onChange={(e) => setEditConnectorName(e.target.value)}
+                                className="clean-input py-1 px-2 text-xs font-semibold w-44"
+                                placeholder="Nama custom broker"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleUpdateName(connector.id);
+                                  if (e.key === "Escape") setEditingConnectorId(null);
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateName(connector.id)}
+                                disabled={isUpdatingName}
+                                className="p-1 text-emerald-600 hover:bg-emerald-50 rounded cursor-pointer"
+                                title="Simpan Nama"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingConnectorId(null)}
+                                className="p-1 text-zinc-400 hover:bg-zinc-100 rounded cursor-pointer"
+                                title="Batal"
+                              >
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-xs text-zinc-900">{connector.name}</span>
+                              {!isRevoked && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingConnectorId(connector.id);
+                                    setEditConnectorName(connector.name);
+                                  }}
+                                  className="p-1 text-zinc-400 hover:text-zinc-800 hover:bg-zinc-100 rounded-md transition-colors cursor-pointer"
+                                  title="Ubah Nama Khusus Broker Ini"
+                                >
+                                  <Pencil className="w-3 h-3" />
+                                </button>
+                              )}
+                            </div>
+                          )}
                           <span
                             className={`px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider ${
                               isRevoked
@@ -480,7 +564,7 @@ export function MT5ConnectionSection() {
               <div>
                 <strong className="text-zinc-800">Izinkan WebRequest HTTPS:</strong> Di MT5, klik <em>Tools &gt; Options &gt; Expert Advisors</em>. Centang <em>Allow Algo Trading</em> dan <em>Allow WebRequest for listed URL</em>. Tambahkan URL:
                 <div className="mt-1 font-mono text-[11px] bg-white p-2 rounded border border-zinc-200 text-zinc-800 select-all">
-                  https://lootly-mu.vercel.app
+                  {typeof window !== "undefined" ? window.location.origin : "https://lootly-mu.vercel.app"}
                 </div>
               </div>
             </div>
@@ -515,13 +599,29 @@ export function MT5ConnectionSection() {
                   <label className="block text-xs font-semibold text-zinc-700 mb-1">
                     Nama Label Konektor
                   </label>
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    {["Valetax MT5", "Exness MT5", "HFM MT5"].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => setConnectorName(preset)}
+                        className={`text-[11px] px-2 py-0.5 rounded-lg border font-medium transition-all cursor-pointer ${
+                          connectorName === preset
+                            ? "bg-emerald-50 text-emerald-800 border-emerald-300 font-bold"
+                            : "bg-zinc-50 text-zinc-600 border-zinc-200 hover:bg-zinc-100"
+                        }`}
+                      >
+                        + {preset}
+                      </button>
+                    ))}
+                  </div>
                   <input
                     type="text"
                     value={connectorName}
                     onChange={(e) => setConnectorName(e.target.value)}
                     required
                     className="clean-input w-full text-xs py-2 px-3"
-                    placeholder="Valetax MT5 VPS"
+                    placeholder="Contoh: Valetax MT5 / Exness MT5 / HFM MT5"
                   />
                 </div>
 

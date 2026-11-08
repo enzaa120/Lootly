@@ -17,11 +17,14 @@ import {
 import { useAppStore } from "../../store/AppContext";
 import { useState, useEffect } from "react";
 import { LootlyLogo } from "../ui/LootlyLogo";
+import { PWAInstallButton } from "../ui/PWAInstallButton";
 
 export function AppLayout() {
   const { 
     accountMode, 
     setAccountMode, 
+    displayCurrency,
+    setDisplayCurrency,
     user, 
     userProfile, 
     loginWithGoogle, 
@@ -100,6 +103,7 @@ export function AppLayout() {
         </div>
 
         <div className="flex items-center gap-2">
+          <PWAInstallButton variant="header" />
           {user ? (
             <button
               onClick={() => navigate("/settings")}
@@ -180,6 +184,34 @@ export function AppLayout() {
           </button>
         </div>
 
+        {/* Currency Switcher (Mobile Drawer) */}
+        <div className="mb-4 p-1 rounded-xl bg-zinc-100 border border-zinc-200/80 grid grid-cols-2 gap-1 select-none">
+          <button
+            type="button"
+            onClick={() => setDisplayCurrency("USD")}
+            className={cn(
+              "py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
+              displayCurrency === "USD"
+                ? "bg-white text-emerald-700 shadow-2xs border border-zinc-200/60 font-extrabold"
+                : "text-zinc-500 hover:text-zinc-800"
+            )}
+          >
+            <span>$ USD</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDisplayCurrency("IDR")}
+            className={cn(
+              "py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
+              displayCurrency === "IDR"
+                ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60 font-extrabold"
+                : "text-zinc-500 hover:text-zinc-800"
+            )}
+          >
+            <span>Rp IDR</span>
+          </button>
+        </div>
+
         {/* Navigation list */}
         <ul className="flex flex-col gap-1 overflow-y-auto pb-4 flex-1">
           {navItems.map((item) => (
@@ -206,6 +238,7 @@ export function AppLayout() {
 
         {/* User Profile / Auth Footer (Mobile Drawer) */}
         <div className="pt-4 border-t border-zinc-200/80 mb-6">
+          <PWAInstallButton variant="sidebar" className="mb-3" />
           {user ? (
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-50 border border-zinc-200/80">
               <div className="flex items-center gap-2.5 overflow-hidden">
@@ -288,6 +321,36 @@ export function AppLayout() {
               <span>Real</span>
             </button>
           </div>
+
+          {/* Currency Switcher (Desktop Sidebar) */}
+          <div className="mt-2.5 p-1 rounded-xl bg-zinc-100/90 border border-zinc-200/80 grid grid-cols-2 gap-1 select-none">
+            <button
+              type="button"
+              onClick={() => setDisplayCurrency("USD")}
+              className={cn(
+                "py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
+                displayCurrency === "USD"
+                  ? "bg-white text-emerald-700 shadow-2xs border border-zinc-200/60 font-extrabold"
+                  : "text-zinc-500 hover:text-zinc-800"
+              )}
+              title="Tampilkan dalam USD ($)"
+            >
+              <span>$ USD</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setDisplayCurrency("IDR")}
+              className={cn(
+                "py-1.5 px-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1 cursor-pointer",
+                displayCurrency === "IDR"
+                  ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60 font-extrabold"
+                  : "text-zinc-500 hover:text-zinc-800"
+              )}
+              title="Tampilkan dalam IDR (Rp)"
+            >
+              <span>Rp IDR</span>
+            </button>
+          </div>
         </div>
 
         {/* Navigation items */}
@@ -313,8 +376,9 @@ export function AppLayout() {
           ))}
         </ul>
 
-        {/* User Account Footer (Desktop Sidebar) - Cleaned of "Cloud Firestore" label */}
+        {/* User Account Footer (Desktop Sidebar) */}
         <div className="pt-4 border-t border-zinc-200/80 mt-auto">
+          <PWAInstallButton variant="sidebar" className="mb-3.5" />
           {user ? (
             <div className="flex items-center justify-between p-2.5 rounded-xl bg-zinc-50 border border-zinc-200">
               <div className="flex items-center gap-2.5 overflow-hidden">

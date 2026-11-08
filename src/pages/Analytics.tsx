@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useAppStore, dedupeTrades } from "../store/AppContext";
-import { formatIDR, formatPercent, formatProfitDual } from "../lib/utils";
+import { formatIDR, formatUSD, formatPercent, formatProfitDual, formatMoney } from "../lib/utils";
 import {
   TrendingUp,
   TrendingDown,
@@ -28,13 +28,11 @@ import {
 } from "recharts";
 
 export function Analytics() {
-  const { trades, accountMode, setAccountMode, settings } = useAppStore();
+  const { trades, accountMode, setAccountMode, settings, displayCurrency, setDisplayCurrency, mt5Account } = useAppStore();
 
   const [selectedMode, setSelectedMode] = useState<"demo" | "real">(accountMode);
 
-  const startingBalance = selectedMode === "demo" 
-    ? settings.startingBalanceDemo 
-    : settings.startingBalanceReal;
+  const hasMt5 = Boolean(mt5Account && typeof mt5Account.balance === "number");
 
   const modeTrades = useMemo(() => {
     return dedupeTrades(trades).filter((t) => t.accountMode === selectedMode);
@@ -52,20 +50,47 @@ export function Analytics() {
   const totalTradesCount = closedTrades.length;
   const winRate = totalTradesCount > 0 ? (winTrades.length / totalTradesCount) * 100 : 0;
 
-  const totalPnlIdr = useMemo(() => {
-    return closedTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
-  }, [closedTrades]);
+  const totalPnl = useMemo(() => {
+    return closedTrades.reduce((acc, t) => {
+      const val = displayCurrency === "USD"
+        ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+        : (t.pnlIdr || 0);
+      return acc + val;
+    }, 0);
+  }, [closedTrades, displayCurrency, settings.usdToIdr]);
 
-  const totalGrowthPercent = startingBalance > 0 ? (totalPnlIdr / startingBalance) * 100 : 0;
+  const startingBalance = useMemo(() => {
+    if (hasMt5 && displayCurrency === "USD") {
+      return Number(Math.max(0, mt5Account.balance - totalPnl).toFixed(2));
+    }
+    const base = selectedMode === "demo" ? settings.startingBalanceDemo : settings.startingBalanceReal;
+    if (displayCurrency === "USD") {
+      return base >= 100000 ? Number((base / (settings.usdToIdr || 15800)).toFixed(2)) : base;
+    } else {
+      return base < 100000 ? Math.round(base * (settings.usdToIdr || 15800)) : base;
+    }
+  }, [hasMt5, mt5Account, totalPnl, selectedMode, settings, displayCurrency]);
+
+  const totalGrowthPercent = startingBalance > 0 ? (totalPnl / startingBalance) * 100 : 0;
 
   // Average Win & Average Loss
   const grossWin = useMemo(() => {
-    return winTrades.reduce((acc, t) => acc + Math.max(0, t.pnlIdr || 0), 0);
-  }, [winTrades]);
+    return winTrades.reduce((acc, t) => {
+      const val = displayCurrency === "USD"
+        ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+        : (t.pnlIdr || 0);
+      return acc + Math.max(0, val);
+    }, 0);
+  }, [winTrades, displayCurrency, settings.usdToIdr]);
 
   const grossLoss = useMemo(() => {
-    return lossTrades.reduce((acc, t) => acc + Math.abs(Math.min(0, t.pnlIdr || 0)), 0);
-  }, [lossTrades]);
+    return lossTrades.reduce((acc, t) => {
+      const val = displayCurrency === "USD"
+        ? (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+        : (t.pnlIdr || 0);
+      return acc + Math.abs(Math.min(0, val));
+    }, 0);
+  }, [lossTrades, displayCurrency, settings.usdToIdr]);
 
   const avgWin = winTrades.length > 0 ? grossWin / winTrades.length : 0;
   const avgLoss = lossTrades.length > 0 ? grossLoss / lossTrades.length : 0;
@@ -79,13 +104,28 @@ export function Analytics() {
   // Best Trade & Worst Trade
   const bestTrade = useMemo(() => {
     if (closedTrades.length === 0) return null;
-    return [...closedTrades].sort((a, b) => (b.pnlIdr || 0) - (a.pnlIdr || 0))[0];
-  }, [closedTrades]);
+    return [...closedTrades].sort((a, b) => {
+      const pnlB = displayCurrency === "USD" ? (b.pnlUsd !== undefined ? b.pnlUsd : ((b.pnlIdr || 0) / 15800)) : (b.pnlIdr || 0);
+      const pnlA = displayCurrency === "USD" ? (a.pnlUsd !== undefined ? a.pnlUsd : ((a.pnlIdr || 0) / 15800)) : (a.pnlIdr || 0);
+      return pnlB - pnlA;
+    })[0];
+  }, [closedTrades, displayCurrency]);
 
   const worstTrade = useMemo(() => {
     if (closedTrades.length === 0) return null;
-    return [...closedTrades].sort((a, b) => (a.pnlIdr || 0) - (b.pnlIdr || 0))[0];
-  }, [closedTrades]);
+    return [...closedTrades].sort((a, b) => {
+      const pnlB = displayCurrency === "USD" ? (b.pnlUsd !== undefined ? b.pnlUsd : ((b.pnlIdr || 0) / 15800)) : (b.pnlIdr || 0);
+      const pnlA = displayCurrency === "USD" ? (a.pnlUsd !== undefined ? a.pnlUsd : ((a.pnlIdr || 0) / 15800)) : (a.pnlIdr || 0);
+      return pnlA - pnlB;
+    })[0];
+  }, [closedTrades, displayCurrency]);
+
+  const getTradePnl = (t: any) => {
+    if (displayCurrency === "USD") {
+      return t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800));
+    }
+    return t.pnlIdr || 0;
+  };
 
   // Performance by Pair / Asset
   const assetPerformance = useMemo(() => {
@@ -98,7 +138,7 @@ export function Analytics() {
       const item = map.get(pair)!;
       item.total++;
       if (t.result === "win") item.wins++;
-      item.pnl += (t.pnlIdr || 0);
+      item.pnl += getTradePnl(t);
     });
 
     return Array.from(map.entries()).map(([asset, val]) => ({
@@ -108,7 +148,7 @@ export function Analytics() {
       pnl: val.pnl,
       growth: startingBalance > 0 ? (val.pnl / startingBalance) * 100 : 0,
     })).sort((a, b) => b.pnl - a.pnl);
-  }, [closedTrades, startingBalance]);
+  }, [closedTrades, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Performance by Market (Forex vs Crypto)
   const marketPerformance = useMemo(() => {
@@ -123,15 +163,16 @@ export function Analytics() {
     closedTrades.forEach((t) => {
       const isCrypto = t.marketType === "crypto" || 
         (t.asset && (t.asset.includes("BTC") || t.asset.includes("ETH") || t.asset.includes("SOL")));
+      const pnlVal = getTradePnl(t);
       
       if (isCrypto) {
         cryptoCount++;
         if (t.result === "win") cryptoWins++;
-        cryptoPnl += (t.pnlIdr || 0);
+        cryptoPnl += pnlVal;
       } else {
         forexCount++;
         if (t.result === "win") forexWins++;
-        forexPnl += (t.pnlIdr || 0);
+        forexPnl += pnlVal;
       }
     });
 
@@ -149,7 +190,7 @@ export function Analytics() {
         growth: startingBalance > 0 ? (cryptoPnl / startingBalance) * 100 : 0,
       },
     };
-  }, [closedTrades, startingBalance]);
+  }, [closedTrades, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Performance by Direction (Buy / Long vs Sell / Short)
   const directionPerformance = useMemo(() => {
@@ -162,14 +203,15 @@ export function Analytics() {
     let sellPnl = 0;
 
     closedTrades.forEach((t) => {
+      const pnlVal = getTradePnl(t);
       if (t.direction === "buy") {
         buyCount++;
         if (t.result === "win") buyWins++;
-        buyPnl += (t.pnlIdr || 0);
+        buyPnl += pnlVal;
       } else {
         sellCount++;
         if (t.result === "win") sellWins++;
-        sellPnl += (t.pnlIdr || 0);
+        sellPnl += pnlVal;
       }
     });
 
@@ -187,7 +229,7 @@ export function Analytics() {
         growth: startingBalance > 0 ? (sellPnl / startingBalance) * 100 : 0,
       },
     };
-  }, [closedTrades, startingBalance]);
+  }, [closedTrades, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Performance by Day of Week (Senin - Minggu)
   const dayOfWeekPerformance = useMemo(() => {
@@ -208,7 +250,7 @@ export function Analytics() {
       if (target) {
         target.total++;
         if (t.result === "win") target.wins++;
-        target.pnl += (t.pnlIdr || 0);
+        target.pnl += getTradePnl(t);
       }
     });
 
@@ -216,7 +258,7 @@ export function Analytics() {
       ...d,
       winRate: d.total > 0 ? (d.wins / d.total) * 100 : 0,
     }));
-  }, [closedTrades]);
+  }, [closedTrades, displayCurrency, settings.usdToIdr]);
 
   // Monthly Breakdown
   const monthlyBreakdown = useMemo(() => {
@@ -232,7 +274,7 @@ export function Analytics() {
       item.total++;
       if (t.result === "win") item.wins++;
       if (t.result === "loss") item.losses++;
-      item.pnl += (t.pnlIdr || 0);
+      item.pnl += getTradePnl(t);
     });
 
     const monthLabels: Record<string, string> = {
@@ -252,12 +294,16 @@ export function Analytics() {
         growth: startingBalance > 0 ? (data.pnl / startingBalance) * 100 : 0,
       };
     }).sort((a, b) => b.key.localeCompare(a.key));
-  }, [closedTrades, startingBalance]);
+  }, [closedTrades, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Daily Trading Plan Target Analytics
-  const dailyTargetIdr = selectedMode === "demo"
+  const dailyTargetBase = selectedMode === "demo"
     ? (settings.dailyProfitTargetDemoIdr ?? 300000)
     : (settings.dailyProfitTargetRealIdr ?? 500000);
+
+  const dailyTargetIdr = displayCurrency === "USD"
+    ? Number((dailyTargetBase / (settings.usdToIdr || 15800)).toFixed(2))
+    : dailyTargetBase;
 
   const dailyTargetPercent = selectedMode === "demo"
     ? (settings.dailyProfitTargetDemoPercent ?? 10)
@@ -274,7 +320,7 @@ export function Analytics() {
       }
       const item = map.get(dStr)!;
       item.tradesCount++;
-      item.netPnl += (t.pnlIdr || 0);
+      item.netPnl += getTradePnl(t);
       if (t.result === "win") item.wins++;
       if (t.result === "loss") item.losses++;
     });
@@ -288,7 +334,7 @@ export function Analytics() {
     const totalActiveDays = daysList.length;
     const targetHitDays = daysList.filter((d) => d.hitTarget).length;
     const hitRate = totalActiveDays > 0 ? (targetHitDays / totalActiveDays) * 100 : 0;
-    const avgDailyPnl = totalActiveDays > 0 ? (totalPnlIdr / totalActiveDays) : 0;
+    const avgDailyPnl = totalActiveDays > 0 ? (totalPnl / totalActiveDays) : 0;
     const avgDailyGainPercent = totalActiveDays > 0 
       ? (daysList.reduce((acc, d) => acc + d.netPercent, 0) / totalActiveDays) 
       : 0;
@@ -316,7 +362,7 @@ export function Analytics() {
       currentMonthPnl,
       monthlyHitRate
     };
-  }, [closedTrades, startingBalance, dailyTargetIdr, totalPnlIdr, monthlyBreakdown]);
+  }, [closedTrades, startingBalance, dailyTargetIdr, totalPnl, monthlyBreakdown, displayCurrency, settings.usdToIdr]);
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 md:px-8 py-6 space-y-8">
@@ -342,39 +388,42 @@ export function Analytics() {
           </p>
         </div>
 
-        {/* Account Mode Switcher */}
-        <div 
-          id="analytics-account-switcher"
-          className="flex items-center bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/80 shadow-2xs select-none self-start sm:self-auto"
-        >
-          <button
-            type="button"
-            onClick={() => setSelectedMode("demo")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              selectedMode === "demo"
-                ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60"
-                : "text-zinc-500 hover:text-zinc-800"
-            }`}
+        {/* Controls: Account Mode & Currency Switcher */}
+        <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+          {/* Account Mode Switcher */}
+          <div 
+            id="analytics-account-switcher"
+            className="flex items-center bg-zinc-100/90 p-1 rounded-xl border border-zinc-200/80 shadow-2xs select-none"
           >
-            <span className={`w-2 h-2 rounded-full ${selectedMode === "demo" ? "bg-blue-500" : "bg-zinc-300"}`} />
-            <span>Demo</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSelectedMode("real")}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-              selectedMode === "real"
-                ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60"
-                : "text-zinc-500 hover:text-zinc-800"
-            }`}
-          >
-            <span className={`w-2 h-2 rounded-full ${selectedMode === "real" ? "bg-emerald-500" : "bg-zinc-300"}`} />
-            <span>Real</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setSelectedMode("demo")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                selectedMode === "demo"
+                  ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60"
+                  : "text-zinc-500 hover:text-zinc-800"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${selectedMode === "demo" ? "bg-blue-500" : "bg-zinc-300"}`} />
+              <span>Demo</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSelectedMode("real")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                selectedMode === "real"
+                  ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60"
+                  : "text-zinc-500 hover:text-zinc-800"
+              }`}
+            >
+              <span className={`w-2 h-2 rounded-full ${selectedMode === "real" ? "bg-emerald-500" : "bg-zinc-300"}`} />
+              <span>Real</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* 2. Top Key Performance Indicators (IDR & %) */}
+      {/* 2. Top Key Performance Indicators */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {/* Total Trades & Win Rate */}
         <div className="clean-card p-5 flex flex-col justify-between">
@@ -394,12 +443,12 @@ export function Analytics() {
 
         {/* Total Profit / Loss (Dual) */}
         <div className="clean-card p-5 flex flex-col justify-between">
-          <span className="text-xs text-zinc-500 font-medium">Total Net Profit / Loss</span>
+          <span className="text-xs text-zinc-500 font-medium">Total Net Profit / Loss ({displayCurrency})</span>
           <div className="my-2">
             <div className={`text-xl md:text-2xl font-bold font-mono truncate ${
-              totalPnlIdr > 0 ? "text-emerald-600" : totalPnlIdr < 0 ? "text-rose-600" : "text-zinc-700"
+              totalPnl > 0 ? "text-emerald-600" : totalPnl < 0 ? "text-rose-600" : "text-zinc-700"
             }`}>
-              {formatIDR(totalPnlIdr, true)}
+              {formatMoney(totalPnl, displayCurrency, true)}
             </div>
             <span className={`text-xs font-mono font-semibold ${
               totalGrowthPercent > 0 ? "text-emerald-600" : totalGrowthPercent < 0 ? "text-rose-600" : "text-zinc-500"
@@ -407,7 +456,7 @@ export function Analytics() {
               {formatPercent(totalGrowthPercent, true)} pertumbuhan
             </span>
           </div>
-          <span className="text-[10px] text-zinc-400">Modal Awal: {formatIDR(startingBalance)}</span>
+          <span className="text-[10px] text-zinc-400">Modal Awal: {formatMoney(startingBalance, displayCurrency)}</span>
         </div>
 
         {/* Profit Factor */}
@@ -434,11 +483,11 @@ export function Analytics() {
           <div className="my-1.5 space-y-1">
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-zinc-500">Avg Win:</span>
-              <span className="text-emerald-600 font-bold">{formatIDR(avgWin)}</span>
+              <span className="text-emerald-600 font-bold">{formatMoney(avgWin, displayCurrency)}</span>
             </div>
             <div className="flex items-center justify-between text-xs font-mono">
               <span className="text-zinc-500">Avg Loss:</span>
-              <span className="text-rose-600 font-bold">{formatIDR(avgLoss)}</span>
+              <span className="text-rose-600 font-bold">{formatMoney(avgLoss, displayCurrency)}</span>
             </div>
           </div>
           <span className="text-[10px] text-zinc-400">
@@ -456,7 +505,7 @@ export function Analytics() {
               Evaluasi Trading Plan & Performa Harian
             </h3>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Target Profit Harian: <strong className="font-mono text-zinc-700">{formatIDR(dailyTargetIdr)}</strong> ({dailyTargetPercent}% dari modal)
+              Target Profit Harian: <strong className="font-mono text-zinc-700">{formatMoney(dailyTargetIdr, displayCurrency)}</strong> ({dailyTargetPercent}% dari modal)
             </p>
           </div>
           <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-full bg-zinc-100 text-zinc-700 border border-zinc-200 self-start sm:self-auto">
@@ -488,7 +537,7 @@ export function Analytics() {
               <div className={`text-lg md:text-xl font-bold font-mono ${
                 dailyAnalytics.avgDailyPnl >= 0 ? "text-emerald-600" : "text-rose-600"
               }`}>
-                {formatIDR(dailyAnalytics.avgDailyPnl, true)}
+                {formatMoney(dailyAnalytics.avgDailyPnl, displayCurrency, true)}
               </div>
               <span className="text-[10px] text-zinc-400">per hari trading aktif</span>
             </div>
@@ -516,7 +565,7 @@ export function Analytics() {
               {dailyAnalytics.bestDay ? (
                 <>
                   <div className="text-lg md:text-xl font-bold font-mono text-emerald-600">
-                    {formatIDR(dailyAnalytics.bestDay.netPnl, true)}
+                    {formatMoney(dailyAnalytics.bestDay.netPnl, displayCurrency, true)}
                   </div>
                   <span className="text-[10px] text-zinc-500 font-mono block truncate">
                     {dailyAnalytics.bestDay.dateStr}
@@ -536,7 +585,7 @@ export function Analytics() {
               {dailyAnalytics.worstDay ? (
                 <>
                   <div className="text-lg md:text-xl font-bold font-mono text-rose-600">
-                    {formatIDR(dailyAnalytics.worstDay.netPnl, true)}
+                    {formatMoney(dailyAnalytics.worstDay.netPnl, displayCurrency, true)}
                   </div>
                   <span className="text-[10px] text-zinc-500 font-mono block truncate">
                     {dailyAnalytics.worstDay.dateStr}
@@ -557,7 +606,7 @@ export function Analytics() {
                 {dailyAnalytics.monthlyHitRate.toFixed(1)}%
               </div>
               <span className="text-[10px] text-zinc-500 font-mono block truncate">
-                {formatIDR(dailyAnalytics.currentMonthPnl, true)}
+                {formatMoney(dailyAnalytics.currentMonthPnl, displayCurrency, true)}
               </span>
             </div>
             <div className="w-full bg-zinc-200 h-1.5 rounded-full overflow-hidden">
@@ -585,7 +634,13 @@ export function Analytics() {
               <div className="mt-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-xl font-bold font-mono text-emerald-700">
-                    {formatIDR(bestTrade.pnlIdr || 0, true)}
+                    {formatMoney(
+                      displayCurrency === "USD"
+                        ? (bestTrade.pnlUsd !== undefined ? bestTrade.pnlUsd : ((bestTrade.pnlIdr || 0) / 15800))
+                        : (bestTrade.pnlIdr || 0),
+                      displayCurrency,
+                      true
+                    )}
                   </span>
                   <span className="text-xs font-semibold font-mono text-emerald-600">
                     ({formatPercent(bestTrade.pnlPercent || 0, true)})
@@ -618,7 +673,13 @@ export function Analytics() {
               <div className="mt-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-xl font-bold font-mono text-rose-700">
-                    {formatIDR(worstTrade.pnlIdr || 0, true)}
+                    {formatMoney(
+                      displayCurrency === "USD"
+                        ? (worstTrade.pnlUsd !== undefined ? worstTrade.pnlUsd : ((worstTrade.pnlIdr || 0) / 15800))
+                        : (worstTrade.pnlIdr || 0),
+                      displayCurrency,
+                      true
+                    )}
                   </span>
                   <span className="text-xs font-semibold font-mono text-rose-600">
                     ({formatPercent(worstTrade.pnlPercent || 0, true)})
@@ -663,7 +724,7 @@ export function Analytics() {
               <div className={`text-xs font-mono font-semibold mt-1 ${
                 marketPerformance.forex.pnl >= 0 ? "text-emerald-600" : "text-rose-600"
               }`}>
-                {formatIDR(marketPerformance.forex.pnl, true)}
+                {formatMoney(marketPerformance.forex.pnl, displayCurrency, true)}
               </div>
               <span className="text-[11px] text-zinc-400 block mt-2">
                 {marketPerformance.forex.total} total trade
@@ -681,7 +742,7 @@ export function Analytics() {
               <div className={`text-xs font-mono font-semibold mt-1 ${
                 marketPerformance.crypto.pnl >= 0 ? "text-emerald-600" : "text-rose-600"
               }`}>
-                {formatIDR(marketPerformance.crypto.pnl, true)}
+                {formatMoney(marketPerformance.crypto.pnl, displayCurrency, true)}
               </div>
               <span className="text-[11px] text-zinc-400 block mt-2">
                 {marketPerformance.crypto.total} total trade
@@ -711,7 +772,7 @@ export function Analytics() {
               <div className={`text-xs font-mono font-semibold mt-1 ${
                 directionPerformance.buy.pnl >= 0 ? "text-emerald-600" : "text-rose-600"
               }`}>
-                {formatIDR(directionPerformance.buy.pnl, true)}
+                {formatMoney(directionPerformance.buy.pnl, displayCurrency, true)}
               </div>
               <span className="text-[11px] text-zinc-400 block mt-2">
                 {directionPerformance.buy.total} total trade
@@ -729,7 +790,7 @@ export function Analytics() {
               <div className={`text-xs font-mono font-semibold mt-1 ${
                 directionPerformance.sell.pnl >= 0 ? "text-emerald-600" : "text-rose-600"
               }`}>
-                {formatIDR(directionPerformance.sell.pnl, true)}
+                {formatMoney(directionPerformance.sell.pnl, displayCurrency, true)}
               </div>
               <span className="text-[11px] text-zinc-400 block mt-2">
                 {directionPerformance.sell.total} total trade
@@ -748,7 +809,7 @@ export function Analytics() {
               Performa Berdasarkan Pair / Aset
             </h3>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Rincian hasil nominal IDR, persentase pertumbuhan, dan win rate per instrumen.
+              Rincian hasil nominal ({displayCurrency}), persentase pertumbuhan, dan win rate per instrumen.
             </p>
           </div>
         </div>
@@ -783,7 +844,7 @@ export function Analytics() {
                     </td>
                     <td className="py-3 text-right font-mono font-bold">
                       <span className={item.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}>
-                        {formatIDR(item.pnl, true)}
+                        {formatMoney(item.pnl, displayCurrency, true)}
                       </span>
                     </td>
                     <td className="py-3 pr-1 text-right font-mono font-semibold">
@@ -822,7 +883,7 @@ export function Analytics() {
                 fontSize={11} 
                 tickLine={false} 
                 axisLine={false}
-                tickFormatter={(val) => `Rp ${(val / 1000).toFixed(0)}k`}
+                tickFormatter={(val) => displayCurrency === "USD" ? `$${val}` : `Rp ${(val / 1000).toFixed(0)}k`}
               />
               <Tooltip 
                 content={({ active, payload }) => {
@@ -832,7 +893,7 @@ export function Analytics() {
                       <div className="bg-white border border-zinc-200 rounded-xl shadow-lg p-3 text-xs">
                         <span className="font-bold text-zinc-900 block mb-1">{data.name}</span>
                         <div className="font-mono text-zinc-600 space-y-0.5">
-                          <div>Net P/L: <strong className={data.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}>{formatIDR(data.pnl, true)}</strong></div>
+                          <div>Net P/L: <strong className={data.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}>{formatMoney(data.pnl, displayCurrency, true)}</strong></div>
                           <div>Win Rate: <strong>{data.winRate.toFixed(1)}%</strong> ({data.wins}W / {data.total}T)</div>
                         </div>
                       </div>
@@ -879,7 +940,7 @@ export function Analytics() {
                   <th className="pb-3 pl-1 font-semibold uppercase tracking-wider">Bulan & Tahun</th>
                   <th className="pb-3 font-semibold uppercase tracking-wider text-center">Trade (W/L)</th>
                   <th className="pb-3 font-semibold uppercase tracking-wider text-center">Win Rate</th>
-                  <th className="pb-3 font-semibold uppercase tracking-wider text-right">Net P/L (IDR)</th>
+                  <th className="pb-3 font-semibold uppercase tracking-wider text-right">Net P/L ({displayCurrency})</th>
                   <th className="pb-3 pr-1 font-semibold uppercase tracking-wider text-right">Pertumbuhan</th>
                 </tr>
               </thead>
@@ -897,7 +958,7 @@ export function Analytics() {
                     </td>
                     <td className="py-3 text-right font-mono font-bold">
                       <span className={m.pnl >= 0 ? "text-emerald-600" : "text-rose-600"}>
-                        {formatIDR(m.pnl, true)}
+                        {formatMoney(m.pnl, displayCurrency, true)}
                       </span>
                     </td>
                     <td className="py-3 pr-1 text-right font-mono font-semibold">

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useAppStore } from "../store/AppContext";
-import { formatNumberWithDots, parseNumberWithDots, formatIDR } from "../lib/utils";
+import { formatNumberWithDots, parseNumberWithDots, formatIDR, formatUSD, formatMoney } from "../lib/utils";
 import { 
   Wallet, 
   Sliders, 
@@ -11,18 +11,32 @@ import {
   Save, 
   CheckCircle2, 
   AlertCircle,
-  Target
+  Target,
+  DollarSign
 } from "lucide-react";
 import { MT5ConnectionSection } from "../components/settings/MT5ConnectionSection";
 
 export function Settings() {
-  const { settings, updateSettings, resetAllData, importData, trades, transactions, accountMode } = useAppStore();
+  const { 
+    settings, 
+    updateSettings, 
+    resetAllData, 
+    importData, 
+    trades, 
+    transactions, 
+    accountMode,
+    displayCurrency,
+    setDisplayCurrency,
+    mt5Account
+  } = useAppStore();
   const [localSettings, setLocalSettings] = useState(settings);
   const [selectedPlanAccount, setSelectedPlanAccount] = useState<"demo" | "real">(accountMode || "demo");
   const [showResetModal, setShowResetModal] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const importInputRef = React.useRef<HTMLInputElement>(null);
+
+  const currencySymbol = displayCurrency === "USD" ? "$" : "Rp";
 
   // Controlled input states for discipline fields allowing free typing & erasing
   const [stopAfterLossesInput, setStopAfterLossesInput] = useState<string>(() =>
@@ -283,14 +297,96 @@ export function Settings() {
 
       <form onSubmit={handleSave} className="space-y-6">
         
-        {/* Block 1: Saldo & Target Akun (IDR) */}
+        {/* Block 0: Preferensi Mata Uang (Currency Preference) */}
+        <div className="clean-card p-5 space-y-3 bg-gradient-to-r from-emerald-50/40 via-white to-blue-50/30 border border-emerald-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shadow-xs">
+                {currencySymbol}
+              </div>
+              <div>
+                <h2 className="text-sm font-bold text-zinc-900 font-display">
+                  Mata Uang Jurnal & Tampilan
+                </h2>
+                <p className="text-xs text-zinc-500">
+                  Ubah format mata uang untuk saldo, profit/loss, kurva ekuitas, dan target.
+                </p>
+              </div>
+            </div>
+
+            {/* Currency Toggle Switcher */}
+            <div className="bg-zinc-100 p-1 rounded-xl flex items-center border border-zinc-200/80 self-start sm:self-auto select-none shadow-2xs">
+              <button
+                type="button"
+                onClick={() => setDisplayCurrency("USD")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  displayCurrency === "USD"
+                    ? "bg-white text-emerald-700 shadow-xs border border-zinc-200/60 font-extrabold"
+                    : "text-zinc-500 hover:text-zinc-900"
+                }`}
+              >
+                <span>$ USD (US Dollar)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDisplayCurrency("IDR")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  displayCurrency === "IDR"
+                    ? "bg-white text-zinc-900 shadow-xs border border-zinc-200/60 font-extrabold"
+                    : "text-zinc-500 hover:text-zinc-900"
+                }`}
+              >
+                <span>Rp IDR (Rupiah)</span>
+              </button>
+            </div>
+          </div>
+
+          {mt5Account && (
+            <div className="text-[11px] text-emerald-800 bg-emerald-50/70 p-2.5 rounded-lg border border-emerald-200/60 flex items-center justify-between gap-2">
+              <span>
+                Akun MT5 Valetax terhubung dengan saldo <strong>${Number(mt5Account.balance || 0).toLocaleString()} USD</strong>. Mode USD sangat direkomendasikan agar seluruh pencatatan identik dengan MetaTrader 5.
+              </span>
+              {displayCurrency === "USD" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bal = Math.round(mt5Account.balance || 10000);
+                    if (selectedPlanAccount === "demo") {
+                      setLocalSettings((prev) => ({
+                        ...prev,
+                        startingBalanceDemo: bal,
+                        targetBalanceDemo: Math.round(bal * 1.5),
+                        dailyProfitTargetDemoIdr: Math.round(bal * 0.05),
+                        maxDailyLossIdrDemo: Math.round(bal * 0.02),
+                      }));
+                    } else {
+                      setLocalSettings((prev) => ({
+                        ...prev,
+                        startingBalanceReal: bal,
+                        targetBalanceReal: Math.round(bal * 1.5),
+                        dailyProfitTargetRealIdr: Math.round(bal * 0.05),
+                        maxDailyLossIdrReal: Math.round(bal * 0.02),
+                      }));
+                    }
+                    showToast(`Modal disinkronkan ke $${bal.toLocaleString()} USD.`);
+                  }}
+                  className="px-2.5 py-1 rounded bg-white text-emerald-800 text-[10px] font-bold border border-emerald-300 hover:bg-emerald-100 transition-colors shrink-0 shadow-2xs cursor-pointer"
+                >
+                  Gunakan Saldo MT5
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Block 1: Saldo & Target Akun */}
         <div className="clean-card p-5 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-bold text-zinc-900 font-display flex items-center gap-2">
               <Wallet className="w-4 h-4 text-zinc-500" />
-              1. Saldo & Target Akun (IDR)
+              1. Saldo & Target Akun ({displayCurrency})
             </h2>
-            <span className="text-[11px] text-zinc-400 font-mono">Format: Rp X.XXX.XXX</span>
+            <span className="text-[11px] text-zinc-400 font-mono">Format: {currencySymbol} X.XXX</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
@@ -300,7 +396,7 @@ export function Settings() {
                 Saldo Awal Akun Demo
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(localSettings.startingBalanceDemo)}
@@ -325,7 +421,7 @@ export function Settings() {
                 Target Saldo Akun Demo
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(localSettings.targetBalanceDemo)}
@@ -341,7 +437,7 @@ export function Settings() {
                 Saldo Awal Akun Real
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(localSettings.startingBalanceReal)}
@@ -366,7 +462,7 @@ export function Settings() {
                 Target Saldo Akun Real
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(localSettings.targetBalanceReal)}
@@ -384,10 +480,10 @@ export function Settings() {
             <div>
               <h2 className="text-sm font-bold text-zinc-900 font-display flex items-center gap-2">
                 <Target className="w-4 h-4 text-emerald-600" />
-                2. Trading Plan Harian
+                2. Trading Plan Harian ({displayCurrency})
               </h2>
               <p className="text-xs text-zinc-500 mt-0.5">
-                Target profit yang ingin dicapai setiap hari. Nilai IDR dan persentase (%) saling terhubung dengan modal akun.
+                Target profit yang ingin dicapai setiap hari. Nilai nominal dan persentase (%) saling terhubung dengan modal akun.
               </p>
             </div>
 
@@ -423,24 +519,24 @@ export function Settings() {
               Basis Modal ({selectedPlanAccount === "demo" ? "Akun Demo" : "Akun Real"}):
             </span>
             <span className="font-mono font-bold text-zinc-900">
-              {formatIDR(currentCapital)}
+              {formatMoney(currentCapital, displayCurrency)}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-            {/* Target Profit Harian (IDR) */}
+            {/* Target Profit Harian */}
             <div>
               <label className="font-semibold text-zinc-700 block mb-1">
-                Target Profit Harian (IDR)
+                Target Profit Harian ({displayCurrency})
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(
                     selectedPlanAccount === "demo"
-                      ? (localSettings.dailyProfitTargetDemoIdr ?? 500000)
-                      : (localSettings.dailyProfitTargetRealIdr ?? 250000)
+                      ? (localSettings.dailyProfitTargetDemoIdr ?? 500)
+                      : (localSettings.dailyProfitTargetRealIdr ?? 250)
                   )}
                   onChange={(e) => handleDailyTargetIdrChange(parseNumberWithDots(e.target.value))}
                   className="clean-input w-full pl-9 pr-3 py-2 font-mono text-xs font-semibold text-zinc-900"
@@ -473,7 +569,7 @@ export function Settings() {
                 <span className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs font-bold">%</span>
               </div>
               <span className="text-[10px] text-zinc-400 mt-1 block">
-                Persentase target terhadap modal akun ({formatIDR(currentCapital)})
+                Persentase target terhadap modal akun ({formatMoney(currentCapital, displayCurrency)})
               </span>
             </div>
           </div>
@@ -485,31 +581,31 @@ export function Settings() {
             <div>
               <h2 className="text-sm font-bold text-zinc-900 font-display flex items-center gap-2">
                 <Sliders className="w-4 h-4 text-rose-600" />
-                3. Manajemen Batas Kerugian Harian & Disiplin
+                3. Manajemen Batas Kerugian Harian & Disiplin ({displayCurrency})
               </h2>
               <p className="text-xs text-zinc-500 mt-0.5">
-                Konfigurasi batas kerugian harian nominal (IDR) untuk akun {selectedPlanAccount.toUpperCase()}.
+                Konfigurasi batas kerugian harian nominal untuk akun {selectedPlanAccount.toUpperCase()}.
               </p>
             </div>
             <span className="text-[11px] font-mono font-medium px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200/60 self-start sm:self-auto">
-              Batas Maksimal: {formatIDR(selectedPlanAccount === "demo" ? (localSettings.maxDailyLossIdrDemo ?? 200000) : (localSettings.maxDailyLossIdrReal ?? 100000))}
+              Batas Maksimal: {formatMoney(selectedPlanAccount === "demo" ? (localSettings.maxDailyLossIdrDemo ?? 200) : (localSettings.maxDailyLossIdrReal ?? 100), displayCurrency)}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-            {/* Batas Kerugian Harian (IDR) */}
+            {/* Batas Kerugian Harian */}
             <div className="sm:col-span-1">
               <label className="font-semibold text-zinc-700 block mb-1">
-                Batas Kerugian Harian (IDR)
+                Batas Kerugian Harian ({displayCurrency})
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">Rp</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400 font-mono text-xs">{currencySymbol}</span>
                 <input
                   type="text"
                   value={formatNumberWithDots(
                     selectedPlanAccount === "demo"
-                      ? (localSettings.maxDailyLossIdrDemo ?? 200000)
-                      : (localSettings.maxDailyLossIdrReal ?? 100000)
+                      ? (localSettings.maxDailyLossIdrDemo ?? 200)
+                      : (localSettings.maxDailyLossIdrReal ?? 100)
                   )}
                   onChange={(e) => handleDailyLossIdrChange(parseNumberWithDots(e.target.value))}
                   className="clean-input w-full pl-9 pr-3 py-2 font-mono text-xs font-semibold text-rose-600"
@@ -518,10 +614,10 @@ export function Settings() {
               <span className="text-[10px] text-zinc-500 mt-1 block">
                 {(() => {
                   const lossVal = selectedPlanAccount === "demo" 
-                    ? (localSettings.maxDailyLossIdrDemo ?? 200000)
-                    : (localSettings.maxDailyLossIdrReal ?? 100000);
+                    ? (localSettings.maxDailyLossIdrDemo ?? 200)
+                    : (localSettings.maxDailyLossIdrReal ?? 100);
                   const pct = currentCapital > 0 ? ((lossVal / currentCapital) * 100).toFixed(1) : "0";
-                  return `Setara dengan ${pct}% dari modal (${formatIDR(currentCapital)})`;
+                  return `Setara dengan ${pct}% dari modal (${formatMoney(currentCapital, displayCurrency)})`;
                 })()}
               </span>
             </div>

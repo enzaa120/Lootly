@@ -4,6 +4,7 @@ import {
   createConnectorToken,
   listConnectors,
   revokeConnector,
+  updateConnectorName,
 } from "../_lib/mt5Service.js";
 
 export default async function handler(
@@ -83,10 +84,37 @@ export default async function handler(
       });
     }
 
-    res.setHeader("Allow", "GET, POST, DELETE");
+    // 4. PATCH: Update Connector Name
+    if (req.method === "PATCH") {
+      const body = req.body || {};
+      const connectorId = body.id;
+      const newName = typeof body.name === "string" && body.name.trim() ? body.name.trim() : "";
+
+      if (!connectorId || !newName) {
+        return res.status(400).json({
+          success: false,
+          error: "ID connector dan nama baru diperlukan.",
+        });
+      }
+
+      const updated = await updateConnectorName(userId, connectorId, newName);
+      if (!updated) {
+        return res.status(404).json({
+          success: false,
+          error: "Connector tidak ditemukan.",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Nama konektor berhasil diperbarui.",
+      });
+    }
+
+    res.setHeader("Allow", "GET, POST, DELETE, PATCH");
     return res.status(405).json({
       success: false,
-      error: "Metode tidak diizinkan. Gunakan GET, POST, atau DELETE.",
+      error: "Metode tidak diizinkan. Gunakan GET, POST, DELETE, atau PATCH.",
     });
   } catch (err: any) {
     console.error("[MT5 Connectors API] Unhandled error:", err);

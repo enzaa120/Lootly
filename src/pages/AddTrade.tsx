@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 
 export function AddTrade() {
-  const { accountMode, settings, trades, updateTrade, addTrade, user } = useAppStore();
+  const { accountMode, settings, trades, updateTrade, addTrade, user, displayCurrency, formatMoney } = useAppStore();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const location = useLocation();
@@ -63,6 +63,7 @@ export function AddTrade() {
 
   // Core Form States
   const [selectedAccount, setSelectedAccount] = useState<"demo" | "real">(accountMode);
+  const [broker, setBroker] = useState<string>("Valetax");
   const [marketType, setMarketType] = useState<MarketType>("forex");
   const [asset, setAsset] = useState<string>("XAU/USD");
   const [direction, setDirection] = useState<TradeDirection>("buy");
@@ -148,6 +149,7 @@ export function AddTrade() {
       const existing = trades.find((t) => t.id === editId);
       if (existing) {
         setSelectedAccount(existing.accountMode);
+        if (existing.broker) setBroker(existing.broker);
         setMarketType(existing.marketType || (existing.asset.includes("BTC") || existing.asset.includes("ETH") ? "crypto" : "forex"));
         setAsset(existing.asset);
         setDirection(existing.direction);
@@ -223,41 +225,65 @@ export function AddTrade() {
 
     const usdToIdr = settings.usdToIdr || 15500;
 
-    // 1. Risk calculation
-    let calculatedRiskIdr = 0;
+    // 1. Risk calculation (compute raw USD and convert to IDR)
+    let calculatedRiskUsd = 0;
     let riskPoints = 0;
     if (!isNaN(ent) && !isNaN(sl)) {
       riskPoints = direction === "buy" ? Math.max(0, ent - sl) : Math.max(0, sl - ent);
-      calculatedRiskIdr = riskPoints * lot * multiplier * usdToIdr;
+      calculatedRiskUsd = riskPoints * lot * multiplier;
+    }
+    const calculatedRiskIdr = calculatedRiskUsd * usdToIdr;
+
+    let finalRiskUsd = calculatedRiskUsd;
+    let finalRiskIdr = calculatedRiskIdr;
+
+    if (customRiskIdr) {
+      const parsed = parseNumberWithDots(customRiskIdr);
+      if (displayCurrency === "USD") {
+        finalRiskUsd = parsed;
+        finalRiskIdr = parsed * usdToIdr;
+      } else {
+        finalRiskIdr = parsed;
+        finalRiskUsd = parsed / usdToIdr;
+      }
     }
 
-    const finalRiskIdr = customRiskIdr ? parseNumberWithDots(customRiskIdr) : calculatedRiskIdr;
-    const riskPercent = activeBalance > 0 ? (finalRiskIdr / activeBalance) * 100 : 0;
+    const finalRiskForPercent = displayCurrency === "USD" ? finalRiskUsd : finalRiskIdr;
+    const riskPercent = activeBalance > 0 ? (finalRiskForPercent / activeBalance) * 100 : 0;
 
     // 2. Profit / Loss calculation (Only compute realized PnL if exit price is filled)
-    let calculatedPnlIdr = 0;
+    let calculatedPnlUsd = 0;
     let autoResult: TradeResult = "open";
 
     if (!isNaN(ent) && !isNaN(exit)) {
       const priceDiff = direction === "buy" ? exit - ent : ent - exit;
-      calculatedPnlIdr = priceDiff * lot * multiplier * usdToIdr;
+      calculatedPnlUsd = priceDiff * lot * multiplier;
 
-      if (calculatedPnlIdr > 1000) {
+      if (calculatedPnlUsd > 0.05) {
         autoResult = "win";
-      } else if (calculatedPnlIdr < -1000) {
+      } else if (calculatedPnlUsd < -0.05) {
         autoResult = "loss";
       } else {
         autoResult = "breakeven";
       }
     }
+    const calculatedPnlIdr = calculatedPnlUsd * usdToIdr;
 
+    let finalPnlUsd = calculatedPnlUsd;
     let finalPnlIdr = calculatedPnlIdr;
     if (manualOverridePnl && customPnlIdr) {
-      const num = parseNumberWithDots(customPnlIdr);
-      finalPnlIdr = autoResult === "loss" ? -num : num;
+      const num = parseFloat(customPnlIdr.replace(/\./g, "").replace(/,/g, ".")) || 0;
+      if (displayCurrency === "USD") {
+        finalPnlUsd = autoResult === "loss" ? -num : num;
+        finalPnlIdr = finalPnlUsd * usdToIdr;
+      } else {
+        finalPnlIdr = autoResult === "loss" ? -num : num;
+        finalPnlUsd = finalPnlIdr / usdToIdr;
+      }
     }
 
-    const profitPercent = (activeBalance > 0 && !isNaN(exit)) ? (finalPnlIdr / activeBalance) * 100 : 0;
+    const finalPnlForPercent = displayCurrency === "USD" ? finalPnlUsd : finalPnlIdr;
+    const profitPercent = (activeBalance > 0 && !isNaN(exit)) ? (finalPnlForPercent / activeBalance) * 100 : 0;
 
     // 3. RR Ratio
     let rr = 0;
@@ -270,8 +296,10 @@ export function AddTrade() {
     }
 
     return {
+      riskUsd: Math.round(finalRiskUsd * 100) / 100,
       riskIdr: Math.round(finalRiskIdr),
       riskPercent,
+      pnlUsd: Math.round(finalPnlUsd * 100) / 100,
       pnlIdr: Math.round(finalPnlIdr),
       profitPercent,
       rr: isNaN(rr) ? 0 : Math.round(rr * 10) / 10,
@@ -290,19 +318,21 @@ export function AddTrade() {
     customPnlIdr, 
     manualOverridePnl, 
     settings.usdToIdr, 
-    activeBalance
+    activeBalance,
+    displayCurrency
   ]);
 
-  // Batas Kerugian Harian (Nominal IDR) berdasarkan akun yang dipilih
-  const maxDailyLossIdr = selectedAccount === "demo"
-    ? (settings.maxDailyLossIdrDemo ?? 200000)
-    : (settings.maxDailyLossIdrReal ?? 100000);
+  // Batas Kerugian Harian berdasarkan mata uang dan akun yang dipilih
+  const maxDailyLoss = selectedAccount === "demo"
+    ? (settings.maxDailyLossIdrDemo ?? (displayCurrency === "USD" ? 200 : 200000))
+    : (settings.maxDailyLossIdrReal ?? (displayCurrency === "USD" ? 100 : 100000));
 
-  // Risk Limit Warning check (Nominal IDR)
+  // Risk Limit Warning check
   const isRiskExceeded = useMemo(() => {
-    if (maxDailyLossIdr <= 0) return false;
-    return calculations.riskIdr > maxDailyLossIdr;
-  }, [calculations.riskIdr, maxDailyLossIdr]);
+    if (maxDailyLoss <= 0) return false;
+    const currentRisk = displayCurrency === "USD" ? calculations.riskUsd : calculations.riskIdr;
+    return currentRisk > maxDailyLoss;
+  }, [calculations.riskUsd, calculations.riskIdr, maxDailyLoss, displayCurrency]);
 
   // Consecutive Loss count for active account
   const consecutiveLossCount = useMemo(() => {
@@ -478,12 +508,15 @@ export function AddTrade() {
         actualTP: parseFloat(takeProfit) || undefined,
         lot: parseFloat(lotSize) || 0.1,
         riskIdr: calculations.riskIdr,
+        riskUsd: calculations.riskUsd,
         riskPercent: calculations.riskPercent,
         pnlIdr: isClosed ? calculations.pnlIdr : 0,
+        pnlUsd: isClosed ? calculations.pnlUsd : 0,
         pnlPercent: isClosed ? calculations.profitPercent : 0,
         rrPlanned: calculations.rr,
         rrRealized: isClosed ? calculations.rr : undefined,
         result: isClosed ? calculations.result : "open",
+        broker: broker || "Valetax",
 
         // Unified Section: "Setup, Psikologi & Bukti Chart"
         setupType: setupTag,
@@ -640,10 +673,10 @@ export function AddTrade() {
           <ShieldAlert className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
           <div className="space-y-0.5">
             <h4 className="font-bold text-rose-950">
-              Peringatan Risiko: Potensi Risiko Melebihi Batas Harian ({formatIDR(maxDailyLossIdr)})
+              Peringatan Risiko: Potensi Risiko Melebihi Batas Harian ({formatMoney(maxDailyLoss)})
             </h4>
             <p className="text-rose-800">
-              Risiko trade ini dihitung sebesar {formatIDR(calculations.riskIdr)} ({calculations.riskPercent.toFixed(1)}%), melewati batas toleransi kerugian harian Anda untuk akun {selectedAccount.toUpperCase()} ({formatIDR(maxDailyLossIdr)}). Pertimbangkan memperkecil lot atau mempersempit jarak Stop Loss.
+              Risiko trade ini dihitung sebesar {formatMoney(displayCurrency === "USD" ? calculations.riskUsd : calculations.riskIdr)} ({calculations.riskPercent.toFixed(1)}%), melewati batas toleransi kerugian harian Anda untuk akun {selectedAccount.toUpperCase()} ({formatMoney(maxDailyLoss)}). Pertimbangkan memperkecil lot atau mempersempit jarak Stop Loss.
             </p>
           </div>
         </div>
@@ -795,6 +828,63 @@ export function AddTrade() {
               >
                 Crypto
               </button>
+            </div>
+          </div>
+
+          {/* Account Mode & Broker Selector */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-3 rounded-xl bg-zinc-50 border border-zinc-200/80">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-zinc-600">Akun:</span>
+              <div className="inline-flex rounded-lg bg-zinc-200/70 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedAccount("demo")}
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    selectedAccount === "demo"
+                      ? "bg-white text-blue-700 shadow-2xs"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  }`}
+                >
+                  Demo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedAccount("real")}
+                  className={`px-3 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                    selectedAccount === "real"
+                      ? "bg-white text-emerald-700 shadow-2xs"
+                      : "text-zinc-600 hover:text-zinc-900"
+                  }`}
+                >
+                  Real
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-zinc-600">Broker:</span>
+              <div className="flex items-center gap-1.5">
+                {(["Valetax", "Exness", "HFM", "Lainnya"] as const).map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => setBroker(b)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer border ${
+                      broker === b
+                        ? b === "Valetax"
+                          ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                          : b === "Exness"
+                          ? "bg-amber-600 text-white border-amber-600 shadow-2xs"
+                          : b === "HFM"
+                          ? "bg-rose-600 text-white border-rose-600 shadow-2xs"
+                          : "bg-zinc-900 text-white border-zinc-900"
+                        : "bg-white border-zinc-200 text-zinc-600 hover:bg-zinc-100"
+                    }`}
+                  >
+                    {b}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -968,7 +1058,7 @@ export function AddTrade() {
                 Risiko Terkalkulasi (SL)
               </span>
               <div className="text-sm font-bold font-mono text-rose-600">
-                {formatIDR(calculations.riskIdr)}
+                {formatMoney(displayCurrency === "USD" ? calculations.riskUsd : calculations.riskIdr)}
                 <span className="text-xs text-zinc-500 font-normal ml-1">
                   ({formatPercent(calculations.riskPercent, false)})
                 </span>
@@ -984,7 +1074,7 @@ export function AddTrade() {
                 <button
                   type="button"
                   onClick={() => setManualOverridePnl(!manualOverridePnl)}
-                  className="text-[10px] text-zinc-500 underline hover:text-zinc-800"
+                  className="text-[10px] text-zinc-500 underline hover:text-zinc-800 cursor-pointer"
                 >
                   {manualOverridePnl ? "Gunakan Auto" : "Manual Input"}
                 </button>
@@ -992,20 +1082,25 @@ export function AddTrade() {
 
               {manualOverridePnl ? (
                 <div className="flex items-center gap-1.5">
-                  <span className="text-xs font-mono font-bold text-zinc-500">Rp</span>
+                  <span className="text-xs font-mono font-bold text-zinc-500">
+                    {displayCurrency === "USD" ? "$" : "Rp"}
+                  </span>
                   <input
                     type="text"
                     value={customPnlIdr}
-                    onChange={(e) => setCustomPnlIdr(formatNumberWithDots(e.target.value))}
-                    placeholder="100.000"
+                    onChange={(e) => setCustomPnlIdr(displayCurrency === "USD" ? e.target.value : formatNumberWithDots(e.target.value))}
+                    placeholder={displayCurrency === "USD" ? "15.00" : "100.000"}
                     className="clean-input py-1 px-2 text-xs font-mono w-full"
                   />
                 </div>
               ) : (
                 <div className={`text-sm font-bold font-mono ${
-                  calculations.pnlIdr > 0 ? "text-emerald-600" : calculations.pnlIdr < 0 ? "text-rose-600" : "text-zinc-600"
+                  calculations.pnlUsd > 0 ? "text-emerald-600" : calculations.pnlUsd < 0 ? "text-rose-600" : "text-zinc-600"
                 }`}>
-                  {formatProfitDual(calculations.pnlIdr, calculations.profitPercent)}
+                  {formatMoney(displayCurrency === "USD" ? calculations.pnlUsd : calculations.pnlIdr, true)}
+                  <span className="text-xs font-normal ml-1 text-zinc-500">
+                    ({formatPercent(calculations.profitPercent, true)})
+                  </span>
                 </div>
               )}
             </div>

@@ -151,8 +151,13 @@ export function TradingCalendar({
       const d = String(dayNum).padStart(2, "0");
       const dateStr = `${nextMonthDate.getFullYear()}-${m}-${d}`;
       const dayTrades = tradesByDate.get(dateStr) || [];
-      const netPnl = dayTrades.reduce((acc, t) => acc + (t.pnlIdr || 0), 0);
-      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (t.pnlIdr ? (t.pnlIdr / startingBalance) * 100 : 0)), 0);
+      const netPnl = dayTrades.reduce((acc, t) => {
+        if (displayCurrency === "USD") {
+          return acc + (t.pnlUsd !== undefined ? t.pnlUsd : ((t.pnlIdr || 0) / (settings.usdToIdr || 15800)));
+        }
+        return acc + (t.pnlIdr || 0);
+      }, 0);
+      const netPercent = dayTrades.reduce((acc, t) => acc + (t.pnlPercent || (startingBalance > 0 ? (netPnl / startingBalance) * 100 : 0)), 0);
 
       days.push({
         dayNumber: dayNum,
@@ -168,7 +173,7 @@ export function TradingCalendar({
     }
 
     return days;
-  }, [year, month, tradesByDate, startingBalance]);
+  }, [year, month, tradesByDate, startingBalance, displayCurrency, settings.usdToIdr]);
 
   // Monthly summary metrics for the currently viewed month
   const monthlyMetrics = useMemo(() => {
@@ -288,13 +293,13 @@ export function TradingCalendar({
           </span>
         </div>
 
-        {/* Net PnL (IDR) */}
+        {/* Net PnL */}
         <div className="p-3 bg-zinc-50 border border-zinc-200/80 rounded-xl flex flex-col col-span-2 sm:col-span-1">
           <span className="text-[11px] font-medium text-zinc-600">Net P/L Bulan Ini</span>
           <span className={`text-base font-bold font-mono mt-1 truncate ${
             monthlyMetrics.netPnl > 0 ? "text-emerald-600" : monthlyMetrics.netPnl < 0 ? "text-rose-600" : "text-zinc-700"
           }`}>
-            {formatIDR(monthlyMetrics.netPnl, true)}
+            {formatMoney(monthlyMetrics.netPnl, displayCurrency, true)}
           </span>
         </div>
 
@@ -399,7 +404,7 @@ export function TradingCalendar({
                   {hitTarget && (
                     <span 
                       className="text-[9px] px-1 py-0.2 rounded font-bold bg-emerald-600 text-white tracking-tight"
-                      title={`Mencapai target harian (${formatIDR(dailyTargetIdr)})`}
+                      title={`Mencapai target harian (${formatMoney(dailyTargetIdr, displayCurrency)})`}
                     >
                       🎯 Target
                     </span>
@@ -407,7 +412,7 @@ export function TradingCalendar({
                   {dailyLossLimitIdr !== undefined && dailyLossLimitIdr > 0 && item.netPnl < 0 && Math.abs(item.netPnl) >= dailyLossLimitIdr && (
                     <span 
                       className="text-[9px] px-1 py-0.2 rounded font-bold bg-rose-600 text-white tracking-tight"
-                      title={`Melebihi batas kerugian harian (${formatIDR(dailyLossLimitIdr)})`}
+                      title={`Melebihi batas kerugian harian (${formatMoney(dailyLossLimitIdr, displayCurrency)})`}
                     >
                       ⚠️ Limit
                     </span>
@@ -432,7 +437,7 @@ export function TradingCalendar({
                   <span className={`text-[11px] md:text-xs font-bold font-mono leading-tight ${
                     isPositive ? "text-emerald-700" : isNegative ? "text-rose-700" : "text-zinc-700"
                   }`}>
-                    {formatIDR(item.netPnl, true)}
+                    {formatMoney(item.netPnl, displayCurrency, true)}
                   </span>
                   <span className={`text-[10px] md:text-[11px] font-mono font-semibold ${
                     isPositive ? "text-emerald-600" : isNegative ? "text-rose-600" : "text-zinc-500"
@@ -487,7 +492,7 @@ export function TradingCalendar({
                   <span className={`text-lg font-bold font-mono ${
                     selectedDayTrades.netPnl > 0 ? "text-emerald-600" : selectedDayTrades.netPnl < 0 ? "text-rose-600" : "text-zinc-700"
                   }`}>
-                    {formatIDR(selectedDayTrades.netPnl, true)}
+                    {formatMoney(selectedDayTrades.netPnl, displayCurrency, true)}
                   </span>
                   <span className={`text-xs font-semibold font-mono ${
                     selectedDayTrades.netPercent > 0 ? "text-emerald-600" : selectedDayTrades.netPercent < 0 ? "text-rose-600" : "text-zinc-500"
@@ -505,7 +510,7 @@ export function TradingCalendar({
                   <Target className="w-4 h-4 text-emerald-600" />
                   <div>
                     <span className="text-zinc-500 text-[11px] block">Target Profit Harian</span>
-                    <span className="font-mono font-bold text-zinc-900">{formatIDR(dailyTargetIdr)}</span>
+                    <span className="font-mono font-bold text-zinc-900">{formatMoney(dailyTargetIdr, displayCurrency)}</span>
                   </div>
                 </div>
 
@@ -513,11 +518,11 @@ export function TradingCalendar({
                   <span className="text-[11px] text-zinc-500 block">Status Target</span>
                   {selectedDayTrades.netPnl >= dailyTargetIdr ? (
                     <span className="font-bold text-emerald-700 inline-flex items-center gap-1 font-mono">
-                      ✓ Target Tercapai (+{formatIDR(selectedDayTrades.netPnl - dailyTargetIdr)})
+                      ✓ Target Tercapai (+{formatMoney(selectedDayTrades.netPnl - dailyTargetIdr, displayCurrency)})
                     </span>
                   ) : (
                     <span className="font-semibold text-zinc-600 font-mono">
-                      Kurang {formatIDR(Math.max(0, dailyTargetIdr - selectedDayTrades.netPnl))}
+                      Kurang {formatMoney(Math.max(0, dailyTargetIdr - selectedDayTrades.netPnl), displayCurrency)}
                     </span>
                   )}
                 </div>
@@ -537,7 +542,7 @@ export function TradingCalendar({
                   }`} />
                   <div>
                     <span className="text-zinc-500 text-[11px] block">Batas Kerugian Harian</span>
-                    <span className="font-mono font-bold text-zinc-900">{formatIDR(dailyLossLimitIdr)}</span>
+                    <span className="font-mono font-bold text-zinc-900">{formatMoney(dailyLossLimitIdr, displayCurrency)}</span>
                   </div>
                 </div>
 
@@ -545,7 +550,7 @@ export function TradingCalendar({
                   <span className="text-zinc-500 text-[11px] block">Status Risiko</span>
                   {selectedDayTrades.netPnl < 0 && Math.abs(selectedDayTrades.netPnl) >= dailyLossLimitIdr ? (
                     <span className="font-bold text-rose-700 inline-flex items-center gap-1 font-mono">
-                      ⚠️ Melebihi Batas (-{formatIDR(Math.abs(selectedDayTrades.netPnl))})
+                      ⚠️ Melebihi Batas (-{formatMoney(Math.abs(selectedDayTrades.netPnl), displayCurrency)})
                     </span>
                   ) : (
                     <span className="font-semibold text-emerald-700 font-mono">
@@ -603,7 +608,13 @@ export function TradingCalendar({
                         <div className={`font-mono text-sm font-bold ${
                           isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-600"
                         }`}>
-                          {formatIDR(trade.pnlIdr || 0, true)}
+                          {formatMoney(
+                            displayCurrency === "USD"
+                              ? (trade.pnlUsd !== undefined ? trade.pnlUsd : ((trade.pnlIdr || 0) / (settings.usdToIdr || 15800)))
+                              : (trade.pnlIdr || 0),
+                            displayCurrency,
+                            true
+                          )}
                         </div>
                         <div className={`font-mono text-xs ${
                           isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-500"

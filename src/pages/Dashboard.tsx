@@ -75,7 +75,11 @@ export function Dashboard() {
       return Number(Math.max(0, mt5Account.balance - totalPnlUsd).toFixed(2));
     }
     const base = accountMode === "demo" ? settings.startingBalanceDemo : settings.startingBalanceReal;
-    return displayCurrency === "USD" ? Number((base / (settings.usdToIdr || 15800)).toFixed(2)) : base;
+    if (displayCurrency === "USD") {
+      return base >= 100000 ? Number((base / (settings.usdToIdr || 15800)).toFixed(2)) : base;
+    } else {
+      return base < 100000 ? Math.round(base * (settings.usdToIdr || 15800)) : base;
+    }
   }, [hasMt5, mt5Account, totalPnlUsd, accountMode, settings, displayCurrency]);
 
   const currentBalance = useMemo(() => {
@@ -364,39 +368,6 @@ export function Dashboard() {
             </button>
           </div>
 
-          {/* Currency Switcher (USD / IDR) */}
-          <div 
-            id="dashboard-currency-switcher"
-            className="bg-zinc-100/90 p-1 rounded-xl flex items-center border border-zinc-200/80 shadow-2xs select-none"
-          >
-            <button
-              type="button"
-              onClick={() => setDisplayCurrency("USD")}
-              className={cn(
-                "px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
-                displayCurrency === "USD"
-                  ? "bg-white text-emerald-700 shadow-2xs border border-zinc-200/60 font-extrabold"
-                  : "text-zinc-500 hover:text-zinc-800"
-              )}
-              title="Tampilkan dalam USD ($)"
-            >
-              <span>$ USD</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDisplayCurrency("IDR")}
-              className={cn(
-                "px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer",
-                displayCurrency === "IDR"
-                  ? "bg-white text-zinc-900 shadow-2xs border border-zinc-200/60 font-extrabold"
-                  : "text-zinc-500 hover:text-zinc-800"
-              )}
-              title="Tampilkan dalam IDR (Rp)"
-            >
-              <span>Rp IDR</span>
-            </button>
-          </div>
-
           {/* + Tambah Trade */}
           <button
             id="btn-dashboard-add-trade"
@@ -416,16 +387,6 @@ export function Dashboard() {
             <Sparkles className="w-3.5 h-3.5 text-amber-500" />
             <span className="hidden xs:inline">Upload Screenshot</span>
             <span className="xs:hidden">Upload</span>
-          </button>
-
-          {/* Lihat Journal */}
-          <button
-            id="btn-dashboard-view-journal"
-            onClick={() => navigate("/journal")}
-            className="px-3 py-2 rounded-xl text-xs font-medium text-zinc-600 hover:text-zinc-900 hover:bg-zinc-100 transition-colors flex items-center gap-1 cursor-pointer whitespace-nowrap"
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Lihat Journal</span>
           </button>
         </div>
       </div>
@@ -650,49 +611,11 @@ export function Dashboard() {
               {Number(profitFactor) >= 1.5 ? "Sehat" : "Perlu Evaluasi"}
             </span>
           </div>
-
-          {/* Monthly Profit Overview Banner (spans all 4 cols) */}
-          <div className="col-span-2 sm:col-span-4 clean-card p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-50/70">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-white border border-zinc-200 flex items-center justify-center text-zinc-700 shrink-0">
-                <Calendar className="w-4 h-4" />
-              </div>
-              <div>
-                <span className="text-xs text-zinc-500 font-medium block">
-                  Ringkasan Bulan Ini ({currentMonthSummary.tradesCount} Trade)
-                </span>
-                <div className="flex items-baseline gap-2 mt-0.5">
-                  <span className={`text-base font-bold font-mono ${
-                    currentMonthSummary.netPnl > 0 ? "text-emerald-600" : currentMonthSummary.netPnl < 0 ? "text-rose-600" : "text-zinc-700"
-                  }`}>
-                    {formatMoney(currentMonthSummary.netPnl, displayCurrency, true)}
-                  </span>
-                  <span className={`text-xs font-semibold font-mono ${
-                    currentMonthSummary.growth > 0 ? "text-emerald-600" : currentMonthSummary.growth < 0 ? "text-rose-600" : "text-zinc-500"
-                  }`}>
-                    ({formatPercent(currentMonthSummary.growth, true)})
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-4 text-xs font-mono text-zinc-500">
-              <span className="text-emerald-700 font-semibold">{currentMonthSummary.wins} Menang</span>
-              <span>•</span>
-              <span className="text-rose-700 font-semibold">{currentMonthSummary.losses} Kalah</span>
-              <button
-                onClick={() => navigate("/analytics")}
-                className="text-xs font-medium text-zinc-900 hover:underline flex items-center gap-0.5 ml-2 cursor-pointer"
-              >
-                Analitik Detail <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
         </div>
 
       </div>
 
-      {/* 2. Kalender Performa Trading (Moved to higher position as requested) */}
+      {/* 2. Kalender Performa Trading */}
       <TradingCalendar 
         trades={modeTrades} 
         startingBalance={startingBalance} 

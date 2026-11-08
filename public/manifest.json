@@ -1,22 +1,45 @@
 {
+  "id": "/",
   "name": "Lootly - Trading Journal & Risk Management",
   "short_name": "Lootly",
-  "description": "Trading journal and risk management application for forex and crypto traders.",
+  "description": "Modern trading journal & risk management application for forex and crypto traders with MetaTrader 5 multi-broker synchronization.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#09090b",
   "theme_color": "#09090b",
+  "categories": ["finance", "productivity", "utilities"],
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
     },
     {
-      "src": "/favicon.svg",
-      "sizes": "32x32",
-      "type": "image/svg+xml"
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }

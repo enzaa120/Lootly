@@ -1,6 +1,21 @@
 import React, { useState, useMemo } from "react";
 import { useAppStore, dedupeTrades } from "../store/AppContext";
 import { useNavigate } from "react-router-dom";
+
+function getBrokerBadge(broker?: string) {
+  if (!broker) return null;
+  const b = broker.toLowerCase();
+  if (b.includes("valetax")) {
+    return { name: "Valetax", className: "bg-indigo-50 text-indigo-700 border-indigo-200" };
+  }
+  if (b.includes("exness")) {
+    return { name: "Exness", className: "bg-amber-50 text-amber-800 border-amber-200" };
+  }
+  if (b.includes("hf")) {
+    return { name: "HFM", className: "bg-rose-50 text-rose-700 border-rose-200" };
+  }
+  return { name: broker, className: "bg-zinc-100 text-zinc-700 border-zinc-200" };
+}
 import { formatIDR, formatUSD, formatPercent } from "../lib/utils";
 import {
   Search,
@@ -31,6 +46,7 @@ export function Journal() {
   const [filterMarket, setFilterMarket] = useState<"all" | "forex" | "crypto">("all");
   const [filterResult, setFilterResult] = useState<"all" | "win" | "loss" | "breakeven" | "open">("all");
   const [filterAsset, setFilterAsset] = useState<string>("all");
+  const [filterBroker, setFilterBroker] = useState<string>("all");
   const [filterDateRange, setFilterDateRange] = useState<"all" | "this_month" | "last_30_days" | "this_week">("all");
   const [sortBy, setSortBy] = useState<"date_desc" | "date_asc" | "pnl_desc" | "pnl_asc" | "rr_desc">("date_desc");
 
@@ -49,6 +65,15 @@ export function Journal() {
     const set = new Set<string>();
     trades.forEach((t) => {
       if (t.asset) set.add(t.asset);
+    });
+    return Array.from(set);
+  }, [trades]);
+
+  // Extract unique brokers present in trades
+  const uniqueBrokers = useMemo(() => {
+    const set = new Set<string>();
+    trades.forEach((t) => {
+      if (t.broker) set.add(t.broker);
     });
     return Array.from(set);
   }, [trades]);
@@ -82,6 +107,13 @@ export function Journal() {
         return false;
       }
 
+      // Broker filter (Valetax, Exness, HFM, etc.)
+      if (filterBroker !== "all") {
+        if (!trade.broker || !trade.broker.toLowerCase().includes(filterBroker.toLowerCase())) {
+          return false;
+        }
+      }
+
       // Date Range filter
       if (filterDateRange !== "all") {
         const tradeDate = new Date(trade.date || trade.createdAt).getTime();
@@ -103,10 +135,11 @@ export function Journal() {
       if (search.trim()) {
         const query = search.toLowerCase();
         const assetMatch = (trade.asset || "").toLowerCase().includes(query);
+        const brokerMatch = (trade.broker || "").toLowerCase().includes(query);
         const setupMatch = (trade.setupType || "").toLowerCase().includes(query);
         const noteMatch = (trade.entryReason || "").toLowerCase().includes(query) || (trade.mentalStateNotes || "").toLowerCase().includes(query);
         const emotionMatch = (trade.emotionBefore || "").toLowerCase().includes(query) || (trade.emotionAfter || "").toLowerCase().includes(query);
-        if (!assetMatch && !setupMatch && !noteMatch && !emotionMatch) {
+        if (!assetMatch && !brokerMatch && !setupMatch && !noteMatch && !emotionMatch) {
           return false;
         }
       }
@@ -130,7 +163,7 @@ export function Journal() {
       }
       return 0;
     });
-  }, [trades, filterAccount, filterMarket, filterResult, filterAsset, filterDateRange, search, sortBy]);
+  }, [trades, filterAccount, filterMarket, filterResult, filterAsset, filterBroker, filterDateRange, search, sortBy]);
 
   // Summary of filtered trades
   const filteredSummary = useMemo(() => {
@@ -186,7 +219,7 @@ export function Journal() {
             Jurnal Trade
           </h1>
           <p className="text-xs md:text-sm text-zinc-500 mt-1">
-            Daftar lengkap seluruh posisi, hasil nominal IDR, persentase, dan catatan setup.
+            Daftar lengkap seluruh posisi, hasil profit/loss ({displayCurrency}), persentase, dan catatan setup.
           </p>
         </div>
 
@@ -256,24 +289,6 @@ export function Journal() {
               </button>
             ))}
           </div>
-          {/* Currency Switcher */}
-          <div className="flex items-center bg-zinc-100 p-0.5 rounded-xl border border-zinc-200 shrink-0">
-            {(["USD", "IDR"] as const).map((curr) => (
-              <button
-                key={curr}
-                type="button"
-                onClick={() => setDisplayCurrency(curr)}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold uppercase transition-all cursor-pointer ${
-                  displayCurrency === curr
-                    ? "bg-white text-emerald-700 shadow-xs font-extrabold"
-                    : "text-zinc-500 hover:text-zinc-800"
-                }`}
-                title={`Tampilkan nominal dalam ${curr}`}
-              >
-                {curr}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Secondary Filter Controls: Result, Asset, Date Range, Sort */}
@@ -315,6 +330,26 @@ export function Journal() {
                 .filter((a) => !["XAU/USD", "BTC/USD", "NAS100", "SP100", "US500", "EUR/USD", "GBP/USD", "USD/JPY"].includes(a))
                 .map((asset) => (
                   <option key={asset} value={asset}>{asset}</option>
+                ))}
+            </select>
+          </div>
+
+          {/* Broker Filter (Multi-broker: Valetax, Exness, HFM) */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-zinc-400 text-[11px] font-medium">Broker:</span>
+            <select
+              value={filterBroker}
+              onChange={(e) => setFilterBroker(e.target.value)}
+              className="clean-input py-1.5 px-2.5 text-xs bg-white text-zinc-700 font-medium cursor-pointer"
+            >
+              <option value="all">Semua Broker</option>
+              <option value="valetax">Valetax</option>
+              <option value="exness">Exness</option>
+              <option value="hf">HFM</option>
+              {uniqueBrokers
+                .filter((b) => !b.toLowerCase().includes("valetax") && !b.toLowerCase().includes("exness") && !b.toLowerCase().includes("hf"))
+                .map((b) => (
+                  <option key={b} value={b}>{b}</option>
                 ))}
             </select>
           </div>
@@ -450,13 +485,21 @@ export function Journal() {
                       )}
                     </div>
                     <div className="flex items-center gap-1.5">
+                      {trade.broker && (() => {
+                        const bInfo = getBrokerBadge(trade.broker);
+                        return (
+                          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${bInfo?.className}`}>
+                            {bInfo?.name}
+                          </span>
+                        );
+                      })()}
                       {trade.source === "mt5_sync" && (
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-zinc-100 text-zinc-700 border border-zinc-200">
-                          MT5 Sync
+                        <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
+                          MT5
                         </span>
                       )}
                       <span
-                        className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full border ${
+                        className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded border ${
                           trade.accountMode === "real"
                             ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                             : "bg-blue-50 text-blue-700 border-blue-200"
@@ -581,9 +624,17 @@ export function Journal() {
                               <span className="font-bold text-sm text-zinc-900 font-display">
                                 {trade.asset}
                               </span>
+                              {trade.broker && (() => {
+                                const bInfo = getBrokerBadge(trade.broker);
+                                return (
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${bInfo?.className}`}>
+                                    {bInfo?.name}
+                                  </span>
+                                );
+                              })()}
                               {trade.source === "mt5_sync" && (
-                                <span className="text-[9px] font-semibold px-1 py-0.2 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
-                                  MT5 Sync
+                                <span className="text-[9px] font-semibold px-1 py-0.5 rounded bg-zinc-100 text-zinc-600 border border-zinc-200">
+                                  MT5
                                 </span>
                               )}
                             </div>
@@ -620,10 +671,10 @@ export function Journal() {
                       {/* Account Type */}
                       <td className="py-3.5 px-3">
                         <span
-                          className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                          className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded border ${
                             trade.accountMode === "real"
-                              ? "bg-rose-50 text-rose-700 border border-rose-200"
-                              : "bg-zinc-100 text-zinc-600 border border-zinc-200"
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                              : "bg-blue-50 text-blue-700 border-blue-200"
                           }`}
                         >
                           {trade.accountMode}

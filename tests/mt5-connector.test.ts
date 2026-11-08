@@ -7,7 +7,7 @@ import {
   normalizeSymbol,
   maskAccountNumber,
 } from "../api/_lib/mt5Service.js";
-import { getPushFirestore } from "../api/_lib/pushService.js";
+import { getServerFirestore } from "../api/_lib/firebaseConfig.js";
 import { doc, getDoc, deleteDoc } from "firebase/firestore";
 import type { MT5WebhookPayload } from "../api/_lib/types.js";
 
@@ -114,7 +114,7 @@ async function runTests() {
   assert(buyResult.processedPositions === 1, "Processed 1 open position");
 
   // Check Firestore Trade created
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const tradeDocRef = doc(db, "users", testUid, "trades", "mt5_8812345_10101");
   const tradeSnap = await getDoc(tradeDocRef);
   assert(tradeSnap.exists(), "Trade record created in users/{uid}/trades");

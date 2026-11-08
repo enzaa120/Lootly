@@ -1,5 +1,8 @@
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getFirestore, Firestore } from "firebase/firestore";
+
 /**
- * Server-safe Firebase configuration for Vercel Serverless Functions.
+ * Server-safe Firebase configuration for backend API and MT5 services.
  * Self-contained without requiring filesystem access to root JSON files at runtime.
  */
 export const serverFirebaseConfig = {
@@ -11,5 +14,15 @@ export const serverFirebaseConfig = {
   storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || "gen-lang-client-0984964714.firebasestorage.app",
   messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "413328545061",
 };
+
+let serverDb: Firestore | null = null;
+
+export function getServerFirestore(): Firestore {
+  if (!serverDb) {
+    const app = getApps().length > 0 ? getApp() : initializeApp(serverFirebaseConfig);
+    serverDb = getFirestore(app, serverFirebaseConfig.firestoreDatabaseId);
+  }
+  return serverDb;
+}
 
 export default serverFirebaseConfig;

@@ -50,6 +50,14 @@
   .clean-badge-gray {
     @apply bg-zinc-100 text-zinc-600 border border-zinc-200 font-medium rounded-md;
   }
+
+  .safe-area-bottom {
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  .safe-area-top {
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+  }
   
   .hide-scrollbar::-webkit-scrollbar {
     display: none;

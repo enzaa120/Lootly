@@ -1,6 +1,6 @@
 import { useState, useEffect, createContext, useContext, ReactNode } from "react";
 import { Trade, Transaction, TradeSettings, AccountMode, AssetType, UserProfile } from "../types";
-import { generateId } from "../lib/utils";
+import { generateId, formatUSD, formatIDR } from "../lib/utils";
 import { 
   auth, 
   db, 
@@ -79,16 +79,16 @@ export function dedupeTrades(list: Trade[]): Trade[] {
 }
 
 const defaultSettings: TradeSettings = {
-  startingBalanceDemo: 10000000, // Rp 10.000.000
-  startingBalanceReal: 5000000,  // Rp 5.000.000
-  targetBalanceDemo: 25000000,   // Rp 25.000.000
-  targetBalanceReal: 15000000,   // Rp 15.000.000
-  dailyProfitTargetDemoIdr: 500000, // Rp 500.000
+  startingBalanceDemo: 10000, // $10,000 USD
+  startingBalanceReal: 5000,  // $5,000 USD
+  targetBalanceDemo: 20000,   // $20,000 USD
+  targetBalanceReal: 10000,   // $10,000 USD
+  dailyProfitTargetDemoIdr: 500, // $500 USD
   dailyProfitTargetDemoPercent: 5.0,
-  dailyProfitTargetRealIdr: 250000, // Rp 250.000
+  dailyProfitTargetRealIdr: 250, // $250 USD
   dailyProfitTargetRealPercent: 5.0,
-  maxDailyLossIdrDemo: 200000, // Rp 200.000
-  maxDailyLossIdrReal: 100000, // Rp 100.000
+  maxDailyLossIdrDemo: 200, // $200 USD
+  maxDailyLossIdrReal: 100, // $100 USD
   maxDailyLossPercent: 2.0,
   maxTradesPerDay: 5,
   stopAfterLosses: 2,
@@ -148,6 +148,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [accountMode, setAccountModeState] = useState<AccountMode>("demo");
   const [selectedAsset, setSelectedAssetState] = useState<AssetType>("XAU/USD");
   const [displayCurrency, setDisplayCurrencyState] = useState<"USD" | "IDR">(() => {
+    // Automatically migrate legacy stored IDR to USD
+    const migrated = localStorage.getItem("lootly.currency_usd_default_v2");
+    if (!migrated) {
+      localStorage.setItem("lootly.currency_usd_default_v2", "true");
+      localStorage.setItem("lootly.currency", "USD");
+      return "USD";
+    }
     return (localStorage.getItem("lootly.currency") as "USD" | "IDR") || "USD";
   });
   const [settings, setSettings] = useState<TradeSettings>(defaultSettings);

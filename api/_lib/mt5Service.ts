@@ -10,7 +10,7 @@ import {
   deleteDoc,
   Timestamp,
 } from "firebase/firestore";
-import { getPushFirestore } from "./pushService.js";
+import { getServerFirestore } from "./firebaseConfig.js";
 import type {
   MT5ConnectorInfo,
   MT5ConnectorTokenRecord,
@@ -114,7 +114,7 @@ export async function createConnectorToken(
     throw new Error("User ID is required to create an MT5 connector.");
   }
 
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const connectorId = `mt5_${Date.now()}_${crypto.randomBytes(4).toString("hex")}`;
   const rawToken = `lootly_mt5_live_${crypto.randomBytes(24).toString("hex")}`;
   const tokenHash = hashConnectorToken(rawToken);
@@ -154,7 +154,7 @@ export async function createConnectorToken(
  */
 export async function listConnectors(userId: string): Promise<MT5ConnectorInfo[]> {
   if (!userId) return [];
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const colRef = collection(db, "users", userId, "mt5Connectors");
   const snap = await getDocs(colRef);
 
@@ -191,7 +191,7 @@ export async function revokeConnector(
   connectorId: string
 ): Promise<boolean> {
   if (!userId || !connectorId) return false;
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const connRef = doc(db, "users", userId, "mt5Connectors", connectorId);
   const snap = await getDoc(connRef);
 
@@ -206,6 +206,24 @@ export async function revokeConnector(
     await setDoc(tokenRef, { revoked: true, updatedAt: now }, { merge: true });
   }
 
+  return true;
+}
+
+/**
+ * Rename/relabel an existing MT5 connector.
+ */
+export async function updateConnectorName(
+  userId: string,
+  connectorId: string,
+  newName: string
+): Promise<boolean> {
+  if (!userId || !connectorId || !newName.trim()) return false;
+  const db = getServerFirestore();
+  const connRef = doc(db, "users", userId, "mt5Connectors", connectorId);
+  const snap = await getDoc(connRef);
+  if (!snap.exists()) return false;
+  const now = new Date().toISOString();
+  await setDoc(connRef, { name: newName.trim(), updatedAt: now }, { merge: true });
   return true;
 }
 
@@ -226,7 +244,7 @@ export async function verifyConnectorToken(
   }
 
   const tokenHash = hashConnectorToken(token);
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const tokenDocRef = doc(db, "mt5ConnectorTokens", tokenHash);
   const tokenSnap = await getDoc(tokenDocRef);
 
@@ -264,7 +282,7 @@ export async function processMT5Webhook(
     throw new Error("Invalid MT5 webhook payload: missing account data.");
   }
 
-  const db = getPushFirestore();
+  const db = getServerFirestore();
   const now = new Date().toISOString();
 
   // 1. Account Identity & Isolation
@@ -569,6 +587,7 @@ export async function processMT5Webhook(
       const possibleTradeIds = [
         `mt5_${loginStr}_${positionIdentifier}`,
         deal.order ? `mt5_${loginStr}_${deal.order}` : null,
+        `mt5_${loginStr}_${dealTicket}`,
       ].filter(Boolean) as string[];
 
       let matchedTradeDocRef = null;
@@ -581,6 +600,25 @@ export async function processMT5Webhook(
           matchedTradeDocRef = trRef;
           matchedTradeData = trSnap.data();
           break;
+        }
+      }
+
+      // Fallback: If not found by direct ID, search open trades for this symbol
+      if (!matchedTradeDocRef) {
+        try {
+          const openTradesQuery = query(
+            collection(db, "users", userId, "trades"),
+            where("source", "==", "mt5_sync"),
+            where("status", "==", "open"),
+            where("asset", "==", symbol)
+          );
+          const openSnaps = await getDocs(openTradesQuery);
+          if (!openSnaps.empty) {
+            matchedTradeDocRef = openSnaps.docs[0].ref;
+            matchedTradeData = openSnaps.docs[0].data();
+          }
+        } catch (e) {
+          console.warn("[MT5 Sync] Open trades fallback query error:", e);
         }
       }
 

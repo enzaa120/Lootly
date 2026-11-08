@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAppStore } from "../store/AppContext";
-import { formatIDR, formatPercent, formatProfitDual } from "../lib/utils";
+import { formatIDR, formatUSD, formatPercent, formatProfitDual, formatMoney } from "../lib/utils";
 import { 
   ArrowLeft, 
   Trash2, 
@@ -26,10 +26,26 @@ import {
 export function TradeDetail() {
   const { tradeId } = useParams<{ tradeId: string }>();
   const navigate = useNavigate();
-  const { trades, deleteTrade, addTrade } = useAppStore();
+  const { trades, deleteTrade, addTrade, displayCurrency, formatMoney, settings } = useAppStore();
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   const trade = trades.find((t) => t.id === tradeId);
+
+  const displayedPnl = useMemo(() => {
+    if (!trade) return 0;
+    if (displayCurrency === "USD") {
+      return trade.pnlUsd !== undefined ? trade.pnlUsd : ((trade.pnlIdr || 0) / (settings.usdToIdr || 15800));
+    }
+    return trade.pnlIdr || 0;
+  }, [trade, displayCurrency, settings.usdToIdr]);
+
+  const displayedRisk = useMemo(() => {
+    if (!trade) return 0;
+    if (displayCurrency === "USD") {
+      return trade.riskUsd !== undefined ? trade.riskUsd : ((trade.riskIdr || 0) / (settings.usdToIdr || 15800));
+    }
+    return trade.riskIdr || 0;
+  }, [trade, displayCurrency, settings.usdToIdr]);
 
   if (!trade) {
     return (
@@ -130,10 +146,11 @@ export function TradeDetail() {
             </div>
             <div>
               <span className="font-bold text-blue-950 block">
-                Disinkronkan secara Otomatis dari Valetax MetaTrader 5
+                Disinkronkan secara Otomatis dari {trade.broker || "MetaTrader 5"}
               </span>
               <span className="text-blue-800 text-[11px]">
-                Broker: {trade.broker || "Valetax"} • Server: {trade.mt5Server || "Valetax-Live"}
+                Broker: {trade.broker || "Valetax"} • Server: {trade.mt5Server || "Live"}
+                {trade.accountNumber ? ` • Akun: ${trade.accountNumber}` : ""}
                 {trade.mt5PositionTicket ? ` • Ticket Posisi: #${trade.mt5PositionTicket}` : ""}
                 {trade.commission ? ` • Komisi: $${trade.commission}` : ""}
                 {trade.swap ? ` • Swap: $${trade.swap}` : ""}
@@ -193,16 +210,22 @@ export function TradeDetail() {
           </div>
         </div>
 
-        {/* P/L Result Card (Dual: IDR + %) */}
+        {/* P/L Result Card (Dual: Currency + %) */}
         <div className="text-left md:text-right bg-zinc-50 md:bg-transparent p-4 md:p-0 rounded-xl border border-zinc-200 md:border-0">
           <span className="text-[11px] uppercase tracking-wider text-zinc-400 font-bold block">
-            Net Profit / Loss
+            Net Profit / Loss ({displayCurrency})
           </span>
           <div className="flex items-baseline md:justify-end gap-2 mt-1">
             <span className={`text-3xl font-bold font-mono ${
               isWin ? "text-emerald-600" : isLoss ? "text-rose-600" : "text-zinc-800"
             }`}>
-              {formatIDR(trade.pnlIdr || 0, true)}
+              {trade.status === "open" ? (
+                trade.floatingProfitUsd !== undefined && trade.floatingProfitUsd !== 0
+                  ? formatMoney(displayCurrency === "USD" ? trade.floatingProfitUsd : trade.floatingProfitUsd * (settings.usdToIdr || 15800), true)
+                  : "Running"
+              ) : (
+                formatMoney(displayedPnl, true)
+              )}
             </span>
           </div>
           <div className="flex items-center md:justify-end gap-2 text-xs font-mono font-semibold mt-0.5">
@@ -261,9 +284,9 @@ export function TradeDetail() {
           </div>
 
           <div className="p-3 bg-zinc-50 rounded-xl border border-zinc-200/80">
-            <span className="text-zinc-500 block mb-1">Risiko Terencana</span>
+            <span className="text-zinc-500 block mb-1">Risiko Terencana ({displayCurrency})</span>
             <span className="font-mono text-sm font-bold text-zinc-900">
-              {formatIDR(trade.riskIdr || 0)}
+              {formatMoney(displayedRisk)}
             </span>
             <span className="text-[10px] text-zinc-400 font-mono block mt-0.5">
               {trade.riskPercent?.toFixed(1) || "0.0"}% saldo
