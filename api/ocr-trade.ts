@@ -201,7 +201,10 @@ CONTEXTUAL ANALYSIS RULES:
 1. PLATFORM & INTERFACE IDENTIFICATION:
    - If TradingView: Look for chart candles, right price axis, order execution markers, position lines, or "Long Position" / "Short Position" measurement tool rectangles (green target zone on top/bottom, red risk zone, entry center line).
    - IMPORTANT FOR TRADINGVIEW: Do NOT confuse the current active market price (the pulsating price label or latest candle price on the right axis) with the trade Entry Price! The Entry Price is specified on the order horizontal line or the center divider of the Long/Short position tool.
-   - If MT4 / MT5: Look for trade tickets (e.g. #1234567), Buy/Sell badges, green/red text, S/L, T/P columns, Volume/Lots (e.g. 0.01, 0.05, 0.10, 1.00), and Open/Close prices.
+   - If MT4 / MT5: Look for trade tickets (e.g. #12345678), Buy/Sell badges, green/red text, S/L, T/P columns, Volume/Lots (e.g. 0.01, 0.05, 0.10, 1.00), and Open/Close prices.
+     * CRITICAL: Do NOT confuse Order/Ticket IDs (e.g. #87319201) with price or lot size!
+     * CRITICAL FOR SL / TP: In MT4/MT5, unset Stop Loss or Take Profit is shown as '0.00', '0.000', '-', or blank. If SL or TP is 0 or unset, ALWAYS return null for stopLoss or takeProfit. NEVER return 0.
+     * Number Formatting: If numbers use comma decimal or space thousand separators (e.g. '2 650,45' or '1,0845'), convert to standard float (2650.45, 1.0845).
    - If Binance/Crypto: Look for pair name (e.g. BTCUSDT, ETHUSDT), Buy/Sell or Long/Short tags, Entry Price, Mark Price, Liq. Price.
 
 2. OPEN VS CLOSED POSITION:
@@ -216,8 +219,8 @@ CONTEXTUAL ANALYSIS RULES:
    - "marketType": "forex" or "crypto".
    - "direction": Lowercase "buy" or "sell".
    - "entryPrice": Floating point number of the executed or planned entry price.
-   - "stopLoss": Floating point number of the Stop Loss price (null if not set or not visible).
-   - "takeProfit": Floating point number of the Take Profit price (null if not set or not visible).
+   - "stopLoss": Floating point number of the Stop Loss price (null if not set, 0, or not visible).
+   - "takeProfit": Floating point number of the Take Profit price (null if not set, 0, or not visible).
    - "exitPrice": Floating point number ONLY if closed; null if open or not visible.
    - "lot": Floating point number of lot or contract size (e.g. 0.03, 0.1, 1.0). Null if not visible.
    - "visiblePnl": Numerical profit or loss amount if explicitly displayed in currency/points (optional, or null).

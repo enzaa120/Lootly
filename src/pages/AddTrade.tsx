@@ -210,25 +210,45 @@ export function AddTrade() {
 
   // Auto Calculations (Entry, SL, TP, Exit, Lot)
   const calculations = useMemo(() => {
-    const ent = parseFloat(entryPrice);
-    const sl = parseFloat(stopLoss);
-    const tp = parseFloat(takeProfit);
-    const exit = parseFloat(exitPrice);
-    const lot = parseFloat(lotSize) || 0.1;
+    const cleanStr = (val: string) => (val || "").replace(",", ".").trim();
+    const ent = parseFloat(cleanStr(entryPrice));
+    const sl = parseFloat(cleanStr(stopLoss));
+    const tp = parseFloat(takeProfit ? cleanStr(takeProfit) : "");
+    const exit = parseFloat(exitPrice ? cleanStr(exitPrice) : "");
+    const lot = parseFloat(cleanStr(lotSize)) || 0.1;
 
     let multiplier = 100;
-    if (asset.includes("BTC") || asset.includes("ETH") || asset.includes("SOL") || marketType === "crypto") {
+    const assetUpper = (asset || "").toUpperCase();
+    if (assetUpper.includes("BTC") || assetUpper.includes("ETH") || assetUpper.includes("SOL") || marketType === "crypto") {
       multiplier = 1;
-    } else if (asset.includes("EUR") || asset.includes("GBP") || asset.includes("AUD") || asset.includes("JPY")) {
+    } else if (
+      assetUpper.includes("NAS100") ||
+      assetUpper.includes("US100") ||
+      assetUpper.includes("SP100") ||
+      assetUpper.includes("SP500") ||
+      assetUpper.includes("US500") ||
+      assetUpper.includes("US30") ||
+      assetUpper.includes("GER40")
+    ) {
+      multiplier = 1;
+    } else if (
+      assetUpper.includes("EUR") ||
+      assetUpper.includes("GBP") ||
+      assetUpper.includes("AUD") ||
+      assetUpper.includes("JPY") ||
+      assetUpper.includes("CHF") ||
+      assetUpper.includes("CAD") ||
+      assetUpper.includes("NZD")
+    ) {
       multiplier = 100000;
     }
 
-    const usdToIdr = settings.usdToIdr || 15500;
+    const usdToIdr = settings.usdToIdr || 15800;
 
     // 1. Risk calculation (compute raw USD and convert to IDR)
     let calculatedRiskUsd = 0;
     let riskPoints = 0;
-    if (!isNaN(ent) && !isNaN(sl)) {
+    if (!isNaN(ent) && !isNaN(sl) && sl > 0) {
       riskPoints = direction === "buy" ? Math.max(0, ent - sl) : Math.max(0, sl - ent);
       calculatedRiskUsd = riskPoints * lot * multiplier;
     }
@@ -240,16 +260,31 @@ export function AddTrade() {
     if (customRiskIdr) {
       const parsed = parseNumberWithDots(customRiskIdr);
       if (displayCurrency === "USD") {
-        finalRiskUsd = parsed;
-        finalRiskIdr = parsed * usdToIdr;
+        if (parsed >= 10000) {
+          finalRiskUsd = Number((parsed / usdToIdr).toFixed(2));
+          finalRiskIdr = parsed;
+        } else {
+          finalRiskUsd = parsed;
+          finalRiskIdr = Math.round(parsed * usdToIdr);
+        }
       } else {
-        finalRiskIdr = parsed;
-        finalRiskUsd = parsed / usdToIdr;
+        if (parsed < 1000 && parsed > 0) {
+          finalRiskUsd = parsed;
+          finalRiskIdr = Math.round(parsed * usdToIdr);
+        } else {
+          finalRiskIdr = parsed;
+          finalRiskUsd = Number((parsed / usdToIdr).toFixed(2));
+        }
       }
     }
 
-    const finalRiskForPercent = displayCurrency === "USD" ? finalRiskUsd : finalRiskIdr;
-    const riskPercent = activeBalance > 0 ? (finalRiskForPercent / activeBalance) * 100 : 0;
+    // Align balance currency with calculated risk/pnl currency
+    const normalizedBalanceUsd = activeBalance >= 100000 ? activeBalance / usdToIdr : activeBalance;
+    const normalizedBalanceIdr = activeBalance < 100000 ? activeBalance * usdToIdr : activeBalance;
+
+    const riskPercent = normalizedBalanceUsd > 0 && finalRiskUsd > 0
+      ? Number(((finalRiskUsd / normalizedBalanceUsd) * 100).toFixed(2))
+      : 0;
 
     // 2. Profit / Loss calculation (Only compute realized PnL if exit price is filled)
     let calculatedPnlUsd = 0;
@@ -272,23 +307,36 @@ export function AddTrade() {
     let finalPnlUsd = calculatedPnlUsd;
     let finalPnlIdr = calculatedPnlIdr;
     if (manualOverridePnl && customPnlIdr) {
-      const num = parseFloat(customPnlIdr.replace(/\./g, "").replace(/,/g, ".")) || 0;
+      const parsedVal = parseNumberWithDots(customPnlIdr);
+      const signedVal = autoResult === "loss" ? -parsedVal : parsedVal;
+
       if (displayCurrency === "USD") {
-        finalPnlUsd = autoResult === "loss" ? -num : num;
-        finalPnlIdr = finalPnlUsd * usdToIdr;
+        if (Math.abs(signedVal) >= 10000) {
+          finalPnlUsd = Number((signedVal / usdToIdr).toFixed(2));
+          finalPnlIdr = signedVal;
+        } else {
+          finalPnlUsd = signedVal;
+          finalPnlIdr = Math.round(signedVal * usdToIdr);
+        }
       } else {
-        finalPnlIdr = autoResult === "loss" ? -num : num;
-        finalPnlUsd = finalPnlIdr / usdToIdr;
+        if (Math.abs(signedVal) < 1000 && signedVal !== 0) {
+          finalPnlUsd = signedVal;
+          finalPnlIdr = Math.round(signedVal * usdToIdr);
+        } else {
+          finalPnlIdr = signedVal;
+          finalPnlUsd = Number((signedVal / usdToIdr).toFixed(2));
+        }
       }
     }
 
-    const finalPnlForPercent = displayCurrency === "USD" ? finalPnlUsd : finalPnlIdr;
-    const profitPercent = (activeBalance > 0 && !isNaN(exit)) ? (finalPnlForPercent / activeBalance) * 100 : 0;
+    const profitPercent = (normalizedBalanceUsd > 0 && !isNaN(exit))
+      ? Number(((finalPnlUsd / normalizedBalanceUsd) * 100).toFixed(2))
+      : 0;
 
     // 3. RR Ratio
     let rr = 0;
-    const targetPrice = !isNaN(exit) ? exit : !isNaN(tp) ? tp : NaN;
-    if (!isNaN(ent) && !isNaN(sl) && riskPoints > 0) {
+    const targetPrice = !isNaN(exit) ? exit : !isNaN(tp) && tp > 0 ? tp : NaN;
+    if (!isNaN(ent) && !isNaN(sl) && sl > 0 && riskPoints > 0) {
       const rewardPoints = !isNaN(targetPrice) 
         ? (direction === "buy" ? targetPrice - ent : ent - targetPrice)
         : 0;
@@ -985,11 +1033,11 @@ export function AddTrade() {
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-600">Entry Price *</label>
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
                 id="input-entry-price"
                 value={entryPrice}
-                onChange={(e) => setEntryPrice(e.target.value)}
+                onChange={(e) => setEntryPrice(e.target.value.replace(/,/g, "."))}
                 placeholder="cth: 2650.50"
                 className="clean-input w-full px-3 py-2 text-sm font-mono"
                 required
@@ -997,39 +1045,85 @@ export function AddTrade() {
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-rose-600">Stop Loss (SL)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-rose-600">Stop Loss (SL)</label>
+                {stopLoss && parseFloat(stopLoss) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setStopLoss("")}
+                    className="text-[10px] text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                  >
+                    Hapus
+                  </button>
+                )}
+              </div>
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
                 id="input-stop-loss"
                 value={stopLoss}
-                onChange={(e) => setStopLoss(e.target.value)}
-                placeholder="cth: 2642.00"
+                onChange={(e) => setStopLoss(e.target.value.replace(/,/g, "."))}
+                placeholder={direction === "buy" ? "Di bawah Entry" : "Di atas Entry"}
                 className="clean-input w-full px-3 py-2 text-sm font-mono border-rose-200 focus:border-rose-400"
               />
+              {/* SL Directional Hint */}
+              {entryPrice && stopLoss && (
+                direction === "buy" && parseFloat(stopLoss) > parseFloat(entryPrice) ? (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 mt-0.5">
+                    SL &gt; Entry (Trailing Stop / SL Plus)
+                  </p>
+                ) : direction === "sell" && parseFloat(stopLoss) < parseFloat(entryPrice) ? (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200 mt-0.5">
+                    SL &lt; Entry (Trailing Stop / SL Plus)
+                  </p>
+                ) : null
+              )}
             </div>
 
             <div className="space-y-1">
-              <label className="text-xs font-medium text-emerald-600">Take Profit (TP)</label>
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-medium text-emerald-600">Take Profit (TP)</label>
+                {takeProfit && parseFloat(takeProfit) > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setTakeProfit("")}
+                    className="text-[10px] text-zinc-400 hover:text-zinc-600 cursor-pointer"
+                  >
+                    Hapus
+                  </button>
+                )}
+              </div>
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
                 id="input-take-profit"
                 value={takeProfit}
-                onChange={(e) => setTakeProfit(e.target.value)}
-                placeholder="cth: 2670.00"
+                onChange={(e) => setTakeProfit(e.target.value.replace(/,/g, "."))}
+                placeholder={direction === "buy" ? "Di atas Entry" : "Di bawah Entry"}
                 className="clean-input w-full px-3 py-2 text-sm font-mono border-emerald-200 focus:border-emerald-400"
               />
+              {/* TP Directional Hint */}
+              {entryPrice && takeProfit && (
+                direction === "buy" && parseFloat(takeProfit) < parseFloat(entryPrice) ? (
+                  <p className="text-[10px] text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 mt-0.5">
+                    Perhatian: TP posisi BUY idealnya di atas Entry!
+                  </p>
+                ) : direction === "sell" && parseFloat(takeProfit) > parseFloat(entryPrice) ? (
+                  <p className="text-[10px] text-rose-700 bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200 mt-0.5">
+                    Perhatian: TP posisi SELL idealnya di bawah Entry!
+                  </p>
+                ) : null
+              )}
             </div>
 
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-600">Exit Price (Close)</label>
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
                 id="input-exit-price"
                 value={exitPrice}
-                onChange={(e) => setExitPrice(e.target.value)}
+                onChange={(e) => setExitPrice(e.target.value.replace(/,/g, "."))}
                 placeholder="Kosong = Open"
                 className="clean-input w-full px-3 py-2 text-sm font-mono"
               />
@@ -1038,11 +1132,11 @@ export function AddTrade() {
             <div className="space-y-1">
               <label className="text-xs font-medium text-zinc-600">Lot / Sizing</label>
               <input
-                type="number"
-                step="any"
+                type="text"
+                inputMode="decimal"
                 id="input-lot-size"
                 value={lotSize}
-                onChange={(e) => setLotSize(e.target.value)}
+                onChange={(e) => setLotSize(e.target.value.replace(/,/g, "."))}
                 placeholder="0.10"
                 className="clean-input w-full px-3 py-2 text-sm font-mono font-semibold"
                 required
@@ -1060,9 +1154,14 @@ export function AddTrade() {
               <div className="text-sm font-bold font-mono text-rose-600">
                 {formatMoney(displayCurrency === "USD" ? calculations.riskUsd : calculations.riskIdr)}
                 <span className="text-xs text-zinc-500 font-normal ml-1">
-                  ({formatPercent(calculations.riskPercent, false)})
+                  ({calculations.riskPercent.toFixed(1)}%)
                 </span>
               </div>
+              <p className="text-[10px] text-zinc-400 font-mono">
+                {displayCurrency === "USD"
+                  ? `~Rp ${calculations.riskIdr.toLocaleString()}`
+                  : `~$${calculations.riskUsd.toFixed(2)} USD`}
+              </p>
             </div>
 
             {/* Profit/Loss Box */}

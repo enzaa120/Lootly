@@ -433,6 +433,18 @@ export async function processMT5Webhook(
       const tradeTime = openTimeIso.split("T")[1]?.substring(0, 5) || "00:00";
       const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("SOL");
 
+      // Calculate planned RR if SL and TP are set
+      let rrPlanned = 0;
+      if (sl > 0 && tp > 0 && openPrice > 0) {
+        const riskDiff = direction === "buy" ? (openPrice - sl) : (sl - openPrice);
+        const rewardDiff = direction === "buy" ? (tp - openPrice) : (openPrice - tp);
+        if (riskDiff > 0 && rewardDiff > 0) {
+          rrPlanned = Number((rewardDiff / riskDiff).toFixed(2));
+        }
+      }
+
+      const floatingProfitIdr = Math.round(profitUsd * usdToIdr);
+
       if (!existingTradeSnap.exists()) {
         // New Open Trade
         const newTradePayload = {
@@ -451,15 +463,16 @@ export async function processMT5Webhook(
           actualEntry: openPrice,
           actualSL: sl > 0 ? sl : null,
           actualTP: tp > 0 ? tp : null,
-          pnlIdr: 0,
+          pnlIdr: floatingProfitIdr,
           pnlUsd: profitUsd,
           floatingProfitUsd: profitUsd,
+          floatingProfitIdr: floatingProfitIdr,
           swap: swapUsd,
           pnlPercent: 0,
-          rrPlanned: 0,
+          rrPlanned,
           rrRealized: 0,
-          setupType: "Valetax MT5",
-          entryReason: `Eksekusi otomatis Valetax MT5 #${uniqueTicket}`,
+          setupType: `${broker} MT5`,
+          entryReason: `Eksekusi otomatis ${broker} MT5 #${uniqueTicket}`,
           mistakes: [],
           source: "mt5_sync",
           broker,
@@ -474,16 +487,21 @@ export async function processMT5Webhook(
         };
         await setDoc(tradeDocRef, sanitizeFirestorePayload(newTradePayload), { merge: true });
       } else {
-        // Existing trade: Update modifications & current floating profit
+        // Existing trade: Update modifications, SL, TP, and current floating profit
         const updatePayload: Record<string, any> = {
           lot,
           pnlUsd: profitUsd,
           floatingProfitUsd: profitUsd,
+          floatingProfitIdr,
+          pnlIdr: floatingProfitIdr,
           swap: swapUsd,
+          actualSL: sl > 0 ? sl : null,
+          actualTP: tp > 0 ? tp : null,
           updatedAt: now,
         };
-        if (sl > 0) updatePayload.actualSL = sl;
-        if (tp > 0) updatePayload.actualTP = tp;
+        if (rrPlanned > 0) {
+          updatePayload.rrPlanned = rrPlanned;
+        }
         await setDoc(tradeDocRef, sanitizeFirestorePayload(updatePayload), { merge: true });
       }
 
@@ -628,10 +646,13 @@ export async function processMT5Webhook(
         const entryPrice = matchedTradeData.actualEntry || price;
         let calculatedRR = 0;
         if (matchedTradeData.actualSL && Math.abs(entryPrice - matchedTradeData.actualSL) > 0) {
-          calculatedRR = Number(
-            (Math.abs(price - entryPrice) / Math.abs(entryPrice - matchedTradeData.actualSL)).toFixed(2)
-          );
+          const riskDiff = Math.abs(entryPrice - matchedTradeData.actualSL);
+          const rewardDiff = matchedTradeData.direction === "buy" ? (price - entryPrice) : (entryPrice - price);
+          calculatedRR = Number((rewardDiff / riskDiff).toFixed(2));
         }
+
+        const accBal = (accountSummary.balance && accountSummary.balance > 0) ? accountSummary.balance : 10000;
+        const pnlPercent = Number(((netProfitUsd / accBal) * 100).toFixed(2));
 
         await setDoc(
           targetTradeRef,
@@ -642,9 +663,12 @@ export async function processMT5Webhook(
             pnlIdr,
             pnlUsd: netProfitUsd,
             floatingProfitUsd: 0,
+            floatingProfitIdr: 0,
             commission: commissionUsd,
             swap: swapUsd,
+            pnlPercent,
             rrRealized: calculatedRR,
+            riskRewardRatio: calculatedRR,
             mt5DealTicket: dealTicket,
             closeTime: dealTimeIso,
             updatedAt: now,
@@ -672,6 +696,9 @@ export async function processMT5Webhook(
       } else {
         // Trade was not in database (e.g. opened before connector was active)
         const isCrypto = symbol.includes("BTC") || symbol.includes("ETH") || symbol.includes("SOL");
+        const accBal = (accountSummary.balance && accountSummary.balance > 0) ? accountSummary.balance : 10000;
+        const pnlPercent = Number(((netProfitUsd / accBal) * 100).toFixed(2));
+
         await setDoc(
           targetTradeRef,
           sanitizeFirestorePayload({
@@ -691,12 +718,15 @@ export async function processMT5Webhook(
             pnlIdr,
             pnlUsd: netProfitUsd,
             floatingProfitUsd: 0,
+            floatingProfitIdr: 0,
             commission: commissionUsd,
             swap: swapUsd,
+            pnlPercent,
             rrPlanned: 0,
             rrRealized: 0,
-            setupType: "Valetax MT5",
-            entryReason: `Eksekusi Valetax MT5 #${positionIdentifier}`,
+            riskRewardRatio: 0,
+            setupType: `${broker} MT5`,
+            entryReason: `Eksekusi ${broker} MT5 #${positionIdentifier}`,
             mistakes: [],
             source: "mt5_sync",
             broker,
@@ -718,15 +748,16 @@ export async function processMT5Webhook(
 
   // 7. Auto-close trades that are no longer active in MT5
   // If an open trade exists in Lootly for this account but is absent from currentOpenTickets,
-  // it has been closed in MT5. We match with recent deals or mark it closed immediately.
-  try {
-    const openTradesQuery = query(
-      collection(db, "users", userId, "trades"),
-      where("source", "==", "mt5_sync"),
-      where("status", "==", "open"),
-      where("accountNumber", "==", maskedLogin)
-    );
-    const openTradesSnap = await getDocs(openTradesQuery);
+  // it has been closed in MT5. Only run if reconciliation.openPositions was explicitly provided in the payload!
+  if (Array.isArray(payload.reconciliation?.openPositions)) {
+    try {
+      const openTradesQuery = query(
+        collection(db, "users", userId, "trades"),
+        where("source", "==", "mt5_sync"),
+        where("status", "==", "open"),
+        where("accountNumber", "==", maskedLogin)
+      );
+      const openTradesSnap = await getDocs(openTradesQuery);
 
     for (const tDoc of openTradesSnap.docs) {
       const tr = tDoc.data();
@@ -745,6 +776,8 @@ export async function processMT5Webhook(
             (d.entry === 1 || d.entry === "out" || d.entry === 2 || d.entry === "inout")
         );
 
+        const accBal = (accountSummary.balance && accountSummary.balance > 0) ? accountSummary.balance : 10000;
+
         if (matchingDeal) {
           const profitUsd = matchingDeal.profit || 0;
           const commUsd = matchingDeal.commission || 0;
@@ -752,6 +785,14 @@ export async function processMT5Webhook(
           const netUsd = Number((profitUsd + commUsd + swapUsd).toFixed(2));
           const pnlIdr = Math.round(netUsd * usdToIdr);
           const tradeResult = netUsd > 0.05 ? "win" : netUsd < -0.05 ? "loss" : "breakeven";
+          const pnlPercent = Number(((netUsd / accBal) * 100).toFixed(2));
+
+          let calculatedRR = tr.riskRewardRatio || tr.rrRealized || 0;
+          if (tr.actualSL && Math.abs(tr.actualEntry - tr.actualSL) > 0) {
+            const riskDiff = Math.abs(tr.actualEntry - tr.actualSL);
+            const rewardDiff = tr.direction === "buy" ? ((matchingDeal.price || tr.actualEntry) - tr.actualEntry) : (tr.actualEntry - (matchingDeal.price || tr.actualEntry));
+            calculatedRR = Number((rewardDiff / riskDiff).toFixed(2));
+          }
 
           await setDoc(
             tDoc.ref,
@@ -762,8 +803,12 @@ export async function processMT5Webhook(
               pnlUsd: netUsd,
               pnlIdr,
               floatingProfitUsd: 0,
+              floatingProfitIdr: 0,
               commission: commUsd,
               swap: swapUsd,
+              pnlPercent,
+              rrRealized: calculatedRR,
+              riskRewardRatio: calculatedRR,
               mt5DealTicket: matchingDeal.ticket,
               closeTime: now,
               updatedAt: now,
@@ -776,6 +821,7 @@ export async function processMT5Webhook(
           const netUsd = Number(floatUsd.toFixed(2));
           const pnlIdr = Math.round(netUsd * usdToIdr);
           const tradeResult = netUsd > 0.05 ? "win" : netUsd < -0.05 ? "loss" : "breakeven";
+          const pnlPercent = Number(((netUsd / accBal) * 100).toFixed(2));
 
           await setDoc(
             tDoc.ref,
@@ -786,6 +832,8 @@ export async function processMT5Webhook(
               pnlUsd: netUsd,
               pnlIdr,
               floatingProfitUsd: 0,
+              floatingProfitIdr: 0,
+              pnlPercent,
               closeTime: now,
               updatedAt: now,
             }),
@@ -794,8 +842,9 @@ export async function processMT5Webhook(
         }
       }
     }
-  } catch (reconcileErr) {
-    console.warn("[MT5 Sync] Open trade reconciliation notice:", reconcileErr);
+    } catch (reconcileErr) {
+      console.warn("[MT5 Sync] Open trade reconciliation notice:", reconcileErr);
+    }
   }
 
   return {
